@@ -209,6 +209,8 @@ def document_json(d,s,decisions=None,job=None,loaded=False):
         job=s.scalar(select(VerificationJob).where(VerificationJob.document_id==d.id).order_by(VerificationJob.created_at.desc()))
     value['decisions']=[{k:getattr(r,k) for k in ['id','outcome','reason','evidence','created_at','reviewer']} for r in decisions or []]
     value['job']=job_json(job) if job else None
+    from document_response import verification_response
+    value['verification_response']=verification_response(value)
     # Detailed records include durable events from every retained verification run.
     # Automated stages are explicitly separate from authorized human decisions.
     if not loaded:
@@ -545,6 +547,9 @@ def evidence_report(id:str,u:Account=Depends(current),s:Session=Depends(db)):
     paragraph('VERIS — Evidence report','Title')
     paragraph('Independent prototype. Not an official NAAC finding or accreditation grade.')
     for k in ['id','filename','college','category','period','status','created_at','sha256']:paragraph(k.upper()+': '+str(data[k]))
+    response=data['verification_response']
+    paragraph('Document result','Heading2');paragraph(response['title'])
+    paragraph('Reason: '+response['reason']);paragraph('Required action: '+response['action'])
     paragraph('Verification checks','Heading2')
     for c in data['checks']:paragraph(f"{c['name']} [{c['state']}]: {c['detail']}")
     if data.get('job'):
@@ -553,7 +558,7 @@ def evidence_report(id:str,u:Account=Depends(current),s:Session=Depends(db)):
         if job.get('error'):paragraph('Processing error: '+job['error'])
         assessment_result=job.get('result',{}).get('assessment')
         if assessment_result:
-            paragraph('Authenticity assessment','Heading2');paragraph(assessment_result['headline'])
+            paragraph('Evidence coverage of this verification run','Heading2')
             paragraph(assessment_result['explanation'])
             for item in assessment_result.get('blocking_checks',[]):paragraph('Blocking finding: '+item)
             for item in assessment_result.get('missing_evidence',[]):paragraph('Required evidence: '+item)

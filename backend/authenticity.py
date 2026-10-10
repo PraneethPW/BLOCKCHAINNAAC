@@ -193,7 +193,7 @@ def assessment(checks):
     source = next((c for c in checks if c['name'] == 'Authorized source comparison'), {})
     supported = source.get('state') == 'pass'
     return dict(engine_version=ENGINE_VERSION, state='conflicting_evidence' if blocking else 'source_match_review_required' if supported else 'not_established',
-                headline='Conflicting evidence requires investigation' if blocking else 'Issuer source bytes match; reviewer approval required' if supported else 'Authenticity has not been established',
+                headline='Not accepted — conflicting evidence' if blocking else 'Issuer original matched — awaiting approval' if supported else 'Not verified — issuer evidence required',
                 verification_eligible=supported and not blocking, blocking_checks=blocking,
                 missing_evidence=[] if supported else ['Exact file comparison to a reviewer-registered issuer source for the same institution, category and period'],
                 assessed_at=datetime.now(timezone.utc).isoformat(),
