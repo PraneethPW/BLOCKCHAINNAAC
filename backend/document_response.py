@@ -8,6 +8,7 @@ def verification_response(document):
     blocking=[c for c in checks if c['state']=='warn' and (c.get('blocking') or c['name']=='Placement count comparison')]
     warnings=[c for c in checks if c['state']=='warn']
     issuer=next((c for c in checks if c['name']=='Authorized source comparison' and c['state']=='pass'),None)
+    publisher=next((c for c in checks if c['name']=='Publisher original comparison' and c['state']=='pass'),None)
     complete=bool(job and job['state']=='complete' and job['result'].get('engine_version')==ENGINE_VERSION)
 
     def result(code,title,reason,action,tone='neutral',acceptance='not_verified',outcome='neutral',mode='automated'):
@@ -39,7 +40,7 @@ def verification_response(document):
     declaration=next((c for c in blocking if c['name']=='Document purpose declarations'),None)
     if declaration:
         fabricated=any(p in declaration.get('declarations',[]) for p in ['fictional document','synthetic document'])
-        return result('sample_document','Fabricated — declared fictional document' if fabricated else 'Non-original — sample document',
+        return result('sample_document','Fake / fabricated — declared fictional document' if fabricated else 'Non-original — sample document',
                       'The first page or PDF metadata explicitly declares a fictional or synthetic document.' if fabricated else
                       'The first page or PDF metadata identifies a sample, demonstration or unpublished article. This is not original publication or institutional evidence.',
                       'Use the actual published article or official issuer original. A declared sample is not proof of deliberate fraud.','danger','blocked','fabricated' if fabricated else 'non_original')
@@ -49,6 +50,9 @@ def verification_response(document):
     if not complete:
         return result('checks_required','Neutral','This file has not completed the current automated inspection.',
                       'Select Recheck now to run the current automatic checks.')
+    if publisher and not issuer:
+        return result('publisher_match','Genuine — matches publisher original',publisher['detail'],
+                      'The official PDF URL, publisher fingerprint and comparison time are in Public sources. This result verifies the published file, not your institution\'s ownership of its claims.','success','accepted','genuine')
     if issuer:
         if document['status']=='verified' and latest and latest['outcome'] in ['verified','appeal_upheld']:
             return result('reviewer_verified','Verified by authorized review',latest['reason'],

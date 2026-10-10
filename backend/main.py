@@ -279,7 +279,7 @@ def run_checks(d,s,include_completed=True,inspection_metadata=None):
     # A completed current full inspection can automatically verify an issuer match.
     # Historical human decisions remain append-only and are never overwritten.
     if not s.scalar(select(Decision).where(Decision.document_id==d.id)):
-        eligible=bool(latest and latest.state=='complete' and prior.get('engine_version')==ENGINE_VERSION and assessment(checks)['verification_eligible'])
+        eligible=bool(latest and latest.state=='complete' and prior.get('engine_version')==ENGINE_VERSION and assessment(checks)['file_verification_eligible'])
         d.status='verified' if eligible else 'flagged' if any(c['state']=='warn' for c in checks) else 'unverified'
     if prior.get('engine_version')==ENGINE_VERSION:
         prior['checks']=checks;prior['assessment']=assessment(checks);latest.result=canonical(prior)
@@ -562,6 +562,10 @@ def evidence_report(id:str,u:Account=Depends(current),s:Session=Depends(db)):
         job=data['job'];paragraph('Processing and source provenance','Heading2')
         paragraph(f"Job: {job['id']} / {job['state']} / {job['stage']} / {job['progress']}%\nUpdated: {job['updated_at']}")
         if job.get('error'):paragraph('Processing error: '+job['error'])
+        publisher=job.get('result',{}).get('publisher_original')
+        if publisher and publisher['state']!='not_applicable':
+            paragraph('Independent publisher original comparison','Heading2')
+            paragraph(f"Result: {publisher['state']}\nSource: {publisher['url']}\nDOI: {publisher['doi']}\nChecked: {publisher['checked_at']}\nPublisher SHA-256: {publisher['publisher_sha256']}\nUploaded SHA-256: {publisher['uploaded_sha256']}\n{publisher['detail']}")
         assessment_result=job.get('result',{}).get('assessment')
         if assessment_result:
             paragraph('Evidence coverage of this verification run','Heading2')

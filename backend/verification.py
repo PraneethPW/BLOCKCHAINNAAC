@@ -10,6 +10,7 @@ from pathlib import Path
 from urllib.parse import quote
 import httpx
 from source_discovery import discover_title
+from publisher_original import compare_publisher_original
 from pypdf import PdfReader
 from pypdf.errors import PdfReadError
 from sqlalchemy import select, text
@@ -176,6 +177,7 @@ def process_next():
                         asyncio.run(discover_title(metadata['claims']['query_title'],received))
                     else:
                         discovery_reason='No usable article title or front-page DOI could be extracted. Provide a readable first page or issuer record.'
+                    publisher=asyncio.run(compare_publisher_original(data,metadata,doc.category))
                     stage('Comparing evidence and institutional context',85)
                     s.refresh(doc,with_for_update=True);doc.text=content;run_checks(doc,s,include_completed=False,inspection_metadata=metadata)
                     checks=json.loads(doc.checks)+observations
@@ -185,13 +187,15 @@ def process_next():
                             if other.text.strip() and other.sha256!=doc.sha256 and normalize(other.text)==normalize(content):
                                 checks.append({'name':'Repeated document text','state':'warn','detail':'A different file in the same institutional context contains identical normalized text. Inspect the version history.'});break
                     checks.extend(publication_checks(metadata['claims'],results,doc.category))
+                    if publisher['state']!='not_applicable':
+                        checks.append(finding('Publisher original comparison','pass' if publisher['state']=='matched' else 'unknown',publisher['detail']))
                     if metadata['claims']['reference_dois']:
                         checks.append(finding('Bibliography identifier scope','unknown',f'{len(metadata["claims"]["reference_dois"])} reference DOI(s) excluded from article authentication. Cited publications can be genuine even when the submitted document is fabricated.'))
                     if metadata['claims']['unclassified_dois'] or metadata['claims']['identifier_limit_exceeded']:
                         checks.append(finding('Identifier coverage','unknown','Some identifiers were outside the front matter or exceeded the query limit. Their roles require manual review; no authenticity was inferred.'))
                     checks.append(finding('Institutional authorship','unknown','Publication metadata and author names do not establish that this institution produced or owns the submission. Obtain authorized institutional evidence.'))
                     doc.checks=canonical(checks)
-                    job.result=canonical({'engine_version':ENGINE_VERSION,'assessment':assessment(checks),'metadata':metadata,'sources':results,'searches':searches,'discovery_reason':discovery_reason,'checks':checks,'checked_at':timestamp(),'limitations':['Reference DOIs and related title search results do not authenticate the uploaded article.','Public registries do not establish institutional authorship.','Certificate trust and private issuer records require authorized access.']})
+                    job.result=canonical({'engine_version':ENGINE_VERSION,'assessment':assessment(checks),'metadata':metadata,'sources':results,'searches':searches,'publisher_original':publisher,'discovery_reason':discovery_reason,'checks':checks,'checked_at':timestamp(),'limitations':['Reference DOIs and related title search results do not authenticate the uploaded article.','Publisher comparison is limited to supported Nature DOI PDF originals.','Public registries and publisher files do not establish institutional authorship.','Certificate trust and private issuer records require authorized access.']})
                     job.state='complete';job.progress=100;job.error='';job.updated_at=timestamp()
                     record_automatic_assessment(doc,job)
                     if not s.scalar(select(Decision).where(Decision.document_id==doc.id)):

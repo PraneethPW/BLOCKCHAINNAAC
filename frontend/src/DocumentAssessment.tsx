@@ -3,7 +3,7 @@ import type {Doc} from './types';
 
 export function assessmentLabel(document:Pick<Doc,'status'|'verification_response'>){
  const result=document.verification_response;
- const outcomes={neutral:'Neutral',checking:'Checking',genuine:'Genuine',manipulated:'Manipulated',corrupted:'Corrupted',fabricated:'Fabricated',non_original:'Non-original',conflict:'Conflicting evidence',fraud_confirmed:'Confirmed fraud'};
+ const outcomes={neutral:'Neutral',checking:'Checking',genuine:'Genuine',manipulated:'Manipulated',corrupted:'Corrupted',fabricated:'Fake / fabricated',non_original:'Non-original',conflict:'Conflicting evidence',fraud_confirmed:'Confirmed fraud'};
  return result?outcomes[result.outcome]||result.title:labels[document.status];
 }
 
