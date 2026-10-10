@@ -11,11 +11,13 @@ from urllib.parse import quote
 import httpx
 from pypdf import PdfReader
 from sqlalchemy import select, text
+from authenticity import (ENGINE_VERSION, claims, ordered_dois, pdf_structure,
+                          signature_checks, publication_checks, assessment, finding, pdf_active_content)
 
 def timestamp():return datetime.now(timezone.utc).isoformat()
 def normalize(value):return re.sub(r'\W+',' ',unicodedata.normalize('NFKC',value).lower()).strip()
 def extract_dois(content):
-    return sorted(set(x.rstrip('.,;:)]}').lower() for x in re.findall(r'\b10\.\d{4,9}/[-._;()/:a-zA-Z0-9]+',content)))[:8]
+    return ordered_dois(content)[:8]
 
 def inspect_bytes(data,ext):
     from main import extract
@@ -24,16 +26,15 @@ def inspect_bytes(data,ext):
     content=extract(data,ext)
     if ext=='.pdf':
         pdf=PdfReader(io.BytesIO(data));metadata['pages']=len(pdf.pages)
+        metadata['front_page_text']=(pdf.pages[0].extract_text() or '')[:8000] if pdf.pages else ''
+        observations.extend(pdf_structure(data))
+        observations.extend(signature_checks(data))
         metadata['pdf_metadata']={str(k).lstrip('/'):str(v)[:500] for k,v in (pdf.metadata or {}).items() if str(k) in ['/CreationDate','/ModDate','/Producer','/Creator','/Author','/Title']}
         fields=pdf.get_fields() or {}
         metadata['signature_fields']=sum(1 for v in fields.values() if v.get('/FT')=='/Sig')
         if metadata['signature_fields']:observations.append({'name':'PDF signature fields','state':'unknown','detail':f"Detected {metadata['signature_fields']} signature fields. Certificate trust, revocation and signer identity require issuer validation; field presence is not authentication."})
-        active=[]
         root=pdf.trailer['/Root']
-        for key in ['/OpenAction','/AA']:
-            if key in root:active.append(key)
-        if '/Names' in root and '/JavaScript' in root['/Names']:active.append('JavaScript')
-        if active:observations.append({'name':'PDF active content','state':'warn','detail':'Active document actions detected: '+', '.join(active)+'. Original is served as a download; inspect in a protected viewer.'})
+        observations.extend(pdf_active_content(root))
         if len(content.strip())<100:
             import pymupdf
             import pytesseract
@@ -51,12 +52,15 @@ def inspect_bytes(data,ext):
                         pieces.append(pytesseract.image_to_string(Image.open(io.BytesIO(pix.tobytes('png'))),timeout=12));metadata['ocr_pages']+=1
                     except (pytesseract.TesseractNotFoundError,RuntimeError):break
             if pieces:content='\n'.join(pieces)[:50000]
+            if not metadata['front_page_text'].strip() and pieces:metadata['front_page_text']=pieces[0][:8000]
             metadata['extraction']='OCR + native text' if metadata['ocr_pages'] else 'No readable text / OCR unavailable'
             if len(pdf.pages)>12:observations.append({'name':'OCR coverage','state':'unknown','detail':'OCR is bounded to the first 12 pages. Additional scanned pages require a separate submission.'})
     elif ext in ['.png','.jpg','.jpeg']:metadata['extraction']='Tesseract OCR' if content.strip() else 'OCR unavailable / no readable text'
     # A normalization digest detects repeated text in files with different binary hashes.
     metadata['normalized_text_sha256']=hashlib.sha256(normalize(content).encode()).hexdigest() if content.strip() else ''
-    metadata['dois']=extract_dois(content)
+    metadata['claims']=claims(content,metadata)
+    metadata['dois']=metadata['claims']['primary_dois']
+    metadata['engine_version']=ENGINE_VERSION
     return content,metadata,observations
 
 async def public_record(client,provider,doi,document_text):
@@ -114,24 +118,32 @@ def process_next():
                     stage('Extracting text and examining file structure',25)
                     content,metadata,observations=inspect_bytes(data,file.suffix)
                     stage('Corroborating identifiers with public registries',55)
-                    results=asyncio.run(corroborate(metadata['dois'],content)) if metadata['dois'] else []
+                    results=asyncio.run(corroborate(metadata['dois'],metadata['claims']['front_matter'])) if metadata['dois'] and doc.category=='Research publications' else []
+                    for result in results:result['scope']='claimed_article'
                     stage('Comparing evidence and institutional context',85)
-                    s.refresh(doc,with_for_update=True);doc.text=content;run_checks(doc,s)
+                    s.refresh(doc,with_for_update=True);doc.text=content;run_checks(doc,s,include_completed=False,inspection_metadata=metadata)
                     checks=json.loads(doc.checks)+observations
                     # Same normalized extracted text under different bytes is an investigative lead.
                     if metadata['normalized_text_sha256']:
                         for other in s.scalars(select(Document).where(Document.id!=doc.id,Document.college==doc.college,Document.category==doc.category,Document.period==doc.period,~Document.id.in_(select(Archive.id)))):
                             if other.text.strip() and other.sha256!=doc.sha256 and normalize(other.text)==normalize(content):
                                 checks.append({'name':'Repeated document text','state':'warn','detail':'A different file in the same institutional context contains identical normalized text. Inspect the version history.'});break
-                    if results:
-                        found=sum(r['state']=='found' for r in results);warnings=sum(bool(r.get('notice')) for r in results)
-                        checks.append({'name':'Public publication registries','state':'warn' if warnings else 'pass' if found else 'unknown','detail':f'{len(metadata["dois"])} DOI identifiers queried across Crossref, DataCite and Europe PMC; {found} registry records found. Metadata presence does not prove institutional authorship or document authenticity.'})
-                    else:checks.append({'name':'Public publication registries','state':'unknown','detail':'No DOI was extracted. Public metadata checks are unavailable for this document; obtain authorized issuer evidence.'})
+                    checks.extend(publication_checks(metadata['claims'],results,doc.category))
+                    if metadata['claims']['reference_dois']:
+                        checks.append(finding('Bibliography identifier scope','unknown',f'{len(metadata["claims"]["reference_dois"])} reference DOI(s) excluded from article authentication. Cited publications can be genuine even when the submitted document is fabricated.'))
+                    if metadata['claims']['unclassified_dois'] or metadata['claims']['identifier_limit_exceeded']:
+                        checks.append(finding('Identifier coverage','unknown','Some identifiers were outside the front matter or exceeded the query limit. Their roles require manual review; no authenticity was inferred.'))
+                    checks.append(finding('Institutional authorship','unknown','Publication metadata and author names do not establish that this institution produced or owns the submission. Obtain authorized institutional evidence.'))
                     doc.checks=canonical(checks)
                     if not s.scalar(select(Decision).where(Decision.document_id==doc.id)) and any(c['state']=='warn' for c in checks):doc.status='flagged'
-                    job.result=canonical({'metadata':metadata,'sources':results,'checks':checks,'checked_at':timestamp(),'limitations':['Public registries do not establish institutional authorship.','Certificate trust and private issuer records require authorized access.']})
+                    job.result=canonical({'engine_version':ENGINE_VERSION,'assessment':assessment(checks),'metadata':metadata,'sources':results,'checks':checks,'checked_at':timestamp(),'limitations':['Reference DOIs do not authenticate the uploaded article.','Public registries do not establish institutional authorship.','Certificate trust and private issuer records require authorized access.']})
                     job.state='complete';job.stage='Ready for evidence review';job.progress=100;job.error='';job.updated_at=timestamp();job.timeline=canonical([*json.loads(job.timeline),{'stage':job.stage,'at':job.updated_at}]);s.commit()
                 except Exception as exc:
-                    s.rollback();job=s.get(VerificationJob,job.id);job.state='failed';job.stage='Verification needs attention';job.error=str(exc) if isinstance(exc,RuntimeError) else 'Document processing failed. Check the file format and retry. Your original evidence is retained.';job.updated_at=timestamp();s.commit()
+                    s.rollback();job=s.get(VerificationJob,job.id);job.state='failed';job.stage='Verification needs attention';job.error=str(exc) if isinstance(exc,RuntimeError) else 'Document processing failed. Check the file format and retry. Your original evidence is retained.';job.updated_at=timestamp()
+                    doc=s.get(Document,job.document_id)
+                    failure=finding('Original file integrity and processing','warn',job.error,blocking=True,kind='integrity')
+                    doc.checks=canonical([failure])
+                    if not s.scalar(select(Decision).where(Decision.document_id==doc.id)):doc.status='flagged'
+                    job.result=canonical({'engine_version':ENGINE_VERSION,'assessment':assessment([failure]),'checks':[failure]});s.commit()
         finally:
             if engine.dialect.name=='postgresql':lock.execute(text('SELECT pg_advisory_unlock(82917625)'))

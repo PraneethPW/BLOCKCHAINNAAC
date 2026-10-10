@@ -193,11 +193,17 @@ def job_json(job):return {**{k:getattr(job,k) for k in ['id','document_id','stat
 def visible_documents(u):
     q=select(Document).where(~Document.id.in_(select(Archive.id).where(Archive.kind=='document')))
     return q if u.role=='reviewer' else q.where(Document.owner_id==u.id)
-def run_checks(d,s):
-    checks=[{'name':'SHA-256 fingerprint','state':'pass','detail':'Calculated from the exact uploaded bytes.'}]
+def run_checks(d,s,include_completed=True,inspection_metadata=None):
+    from authenticity import declaration_checks, assessment
+    checks=[{'name':'SHA-256 fingerprint','state':'pass','kind':'processing','detail':'Calculated from the exact uploaded bytes. This records identity after submission; it does not establish that the file was genuine before upload.'}]
     duplicate=s.scalar(select(Document).where(Document.sha256==d.sha256,Document.id!=d.id,~Document.id.in_(select(Archive.id))))
-    checks.append({'name':'Duplicate fingerprint','state':'warn' if duplicate else 'pass','detail':'A matching submission exists; context needs authorized review.' if duplicate else 'No identical fingerprint in the current registry.'})
+    checks.append({'name':'Duplicate fingerprint','state':'warn' if duplicate else 'pass','kind':'processing','detail':'A matching submission exists; context needs authorized review.' if duplicate else 'No identical fingerprint in the current registry. New files can still be fabricated.'})
     source=s.scalar(select(SourceRecord).where(SourceRecord.sha256==d.sha256,SourceRecord.college==d.college,SourceRecord.category==d.category,SourceRecord.period==d.period,~SourceRecord.id.in_(select(Archive.id))))
+    source_intact=bool(source and (STORAGE/source.storage_name).is_file() and hashlib.sha256((STORAGE/source.storage_name).read_bytes()).hexdigest()==source.sha256)
+    original_intact=(STORAGE/d.storage_name).is_file() and hashlib.sha256((STORAGE/d.storage_name).read_bytes()).hexdigest()==d.sha256
+    if source and not source_intact:checks.append({'name':'Registered issuer source integrity','state':'warn','kind':'integrity','blocking':True,'detail':'The registered issuer file is missing or its bytes differ from its registered fingerprint. Restore validated issuer evidence before accepting any match.'})
+    if not original_intact:checks.append({'name':'Stored original integrity','state':'warn','kind':'integrity','blocking':True,'detail':'The stored original is missing or differs from the submitted fingerprint. Investigate storage integrity before accepting this record.'})
+    if source and not source_intact:source=None
     checks.append({'name':'Authorized source comparison','state':'pass' if source else 'unknown','detail':f'Exact match to reviewer-registered source from {source.issuer}. Reference: {source.reference}. Human review still required.' if source else 'No matching authorized issuer record is available. Missing source evidence is not fraud.'})
     if d.category=='Student placements':
         numbers=set(int(x) for x in re.findall(r'(\d+)\s+(?:students?\s+)?(?:placed|placements)\b',d.text,re.I))
@@ -211,15 +217,24 @@ def run_checks(d,s):
         elif len(numbers)>1 or len(confirmed)>1:
             state='warn';detail='Multiple different placement counts were found in the document or source records. Review the reporting context before comparing.'
         checks.append({'name':'Placement count comparison','state':state,'detail':detail})
-    checks.append({'name':'Digital signature','state':'unknown','detail':'Cryptographic signer trust and revocation validation are not configured. A visible signature is not proof of authenticity.'})
+    checks.append({'name':'Issuer signing trust','state':'unknown','detail':'Issuer-approved certificate trust roots and current revocation evidence are not configured. Embedded signed-byte integrity is examined during full verification; visible stamps do not authenticate an issuer.'})
     checks.append({'name':'Text extraction','state':'pass' if d.text.strip() else 'unknown','detail':'Text extracted for investigation; extraction does not verify the claims.' if d.text.strip() else 'No readable text. Provide a clearer file or source evidence.'})
+    checks[-1]['kind']='processing'
+    latest=s.scalar(select(VerificationJob).where(VerificationJob.document_id==d.id).order_by(VerificationJob.created_at.desc())) if include_completed else None
+    prior=json.loads(latest.result) if latest and latest.state in ['complete','failed'] else {}
+    metadata=inspection_metadata or prior.get('metadata',{})
+    checks.extend(declaration_checks(d.text,metadata))
+    names={c['name'] for c in checks}
+    if prior.get('engine_version')=='3.0':checks.extend(c for c in prior.get('checks',[]) if c['name'] not in names)
     d.checks=canonical(checks)
     # Checks never override a human decision or mark a document verified.
     if not s.scalar(select(Decision).where(Decision.document_id==d.id)):
         d.status='flagged' if any(c['state']=='warn' for c in checks) else 'unverified'
+    if prior.get('engine_version')=='3.0':
+        prior['checks']=checks;prior['assessment']=assessment(checks);latest.result=canonical(prior)
 def extract(data, ext):
     try:
-        if ext=='.txt': return data.decode('utf-8',errors='replace')[:50000]
+        if ext=='.txt': return data.decode('utf-8',errors='strict')[:50000]
         if ext=='.pdf':
             reader=PdfReader(io.BytesIO(data))
             if reader.is_encrypted: raise HTTPException(400,'Encrypted PDFs are not supported. Upload an unlocked copy.')
@@ -326,7 +341,7 @@ class PasswordChange(BaseModel):
 def health():
     with SessionLocal() as s:
         network=os.getenv('LEDGER_NETWORK','sepolia'); config=s.get(NetworkConfig,network)
-        return {'status':'ok','prototype':True,'database':'postgresql' if DATABASE_URL.startswith('postgresql') else 'local-sqlite','blockchain':{'network':network,'contract':config.address if config else os.getenv('LEDGER_CONTRACT_ADDRESS',''),'automatic':os.getenv('AUTO_ANCHOR','false').lower()=='true'}}
+        return {'status':'ok','prototype':True,'verification_engine':'3.0','database':'postgresql' if DATABASE_URL.startswith('postgresql') else 'local-sqlite','blockchain':{'network':network,'contract':config.address if config else os.getenv('LEDGER_CONTRACT_ADDRESS',''),'automatic':os.getenv('AUTO_ANCHOR','false').lower()=='true'}}
 @app.post('/auth/register',status_code=201)
 def register(body:Registration,s:Session=Depends(db)):
     email=str(body.email).lower()
@@ -430,6 +445,15 @@ def decide(id:str,body:Review,u:Account=Depends(reviewer),s:Session=Depends(db))
     if body.outcome in ['verified','confirmed_fraud','appeal_upheld'] and len(body.evidence.strip())<10:raise HTTPException(400,'Supporting evidence is required.')
     if d.status=='confirmed_fraud' and body.outcome!='appeal_upheld':raise HTTPException(409,'A confirmed finding can only be changed through an appeal.')
     if body.outcome=='appeal_upheld' and d.status!='confirmed_fraud':raise HTTPException(409,'An appeal requires an existing confirmed finding.')
+    if body.outcome in ['verified','appeal_upheld']:
+        from authenticity import ENGINE_VERSION, assessment
+        job=s.scalar(select(VerificationJob).where(VerificationJob.document_id==id).order_by(VerificationJob.created_at.desc()))
+        result=json.loads(job.result) if job else {}
+        if not job or job.state!='complete' or result.get('engine_version')!=ENGINE_VERSION:
+            raise HTTPException(409,'Run the current full verification and wait for completion before accepting this document.')
+        run_checks(d,s)
+        if not assessment(json.loads(d.checks))['verification_eligible']:
+            raise HTTPException(409,'Acceptance requires an exact reviewer-registered issuer source and no unresolved blocking authenticity or integrity conflicts. Register issuer evidence and re-run verification.')
     r=Decision(id=uid(),document_id=id,reviewer_id=u.id,reviewer=u.name,outcome=body.outcome,reason=body.reason.strip(),evidence=body.evidence.strip(),created_at=now())
     s.add(r)
     if body.outcome in ['confirmed_fraud','appeal_upheld']:
@@ -481,8 +505,14 @@ def evidence_report(id:str,u:Account=Depends(current),s:Session=Depends(db)):
         job=data['job'];paragraph('Processing and source provenance','Heading2')
         paragraph(f"Job: {job['id']} / {job['state']} / {job['stage']} / {job['progress']}%\nUpdated: {job['updated_at']}")
         if job.get('error'):paragraph('Processing error: '+job['error'])
+        assessment_result=job.get('result',{}).get('assessment')
+        if assessment_result:
+            paragraph('Authenticity assessment','Heading2');paragraph(assessment_result['headline'])
+            paragraph(assessment_result['explanation'])
+            for item in assessment_result.get('blocking_checks',[]):paragraph('Blocking finding: '+item)
+            for item in assessment_result.get('missing_evidence',[]):paragraph('Required evidence: '+item)
         for r in job.get('result',{}).get('sources',[]):
-            paragraph(f"{r['provider']} / {r['state']} / DOI: {r['identifier']}\nChecked: {r['checked_at']}\nSource: {r['url']}\nTitle: {r.get('title','')}\nAuthors: {', '.join(r.get('authors',[]))}\nResult: {r['detail']}\nNotice: {r.get('notice','none')}")
+            paragraph(f"{r['provider']} / {r['state']} / Scope: {r.get('scope','unclassified legacy identifier')} / DOI: {r['identifier']}\nChecked: {r['checked_at']}\nSource: {r['url']}\nTitle: {r.get('title','')}\nAuthors: {', '.join(r.get('authors',[]))}\nResult: {r['detail']}\nNotice: {r.get('notice','none')}")
         for t in job.get('timeline',[]):paragraph(t['at']+' / '+t['stage'])
         paragraph('Public metadata corroboration does not establish institutional authorship. Cryptographic signer trust and private issuer records require authorized access.')
     paragraph('Authorized decisions','Heading2')

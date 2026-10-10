@@ -70,6 +70,11 @@ def test_review_and_appeal_are_append_only(client):
     assert len(anchors)==1 and anchors[0]['state'].startswith('Queued') and not anchors[0]['tx_hash']
     assert 'reason' not in anchors[0] and 'filename' not in anchors[0]
     assert client.post(f"/documents/{d['id']}/recheck",headers=reviewer).json()['status']=='confirmed_fraud'
+    # Acceptance on appeal needs current processing and an exact issuer source.
+    assert client.post('/trusted-records',headers=reviewer,data={'college':'Test College','category':'Student placements','period':'2025-26','issuer':'Test Issuer','reference':'Authorized appeal source REF-456'},files={'file':('issuer.txt',b'Claim: 100 placements; needs corroboration.','text/plain')}).status_code==201
+    assert client.post(f"/documents/{d['id']}/verify",headers=owner).status_code==202
+    import verification
+    verification.process_next()
     appeal=client.post(endpoint,headers=reviewer,json={'outcome':'appeal_upheld','reason':'An appeal produced new authorized records overturning the finding.','evidence':'Appeal evidence REF-456'})
     assert appeal.json()['status']=='verified'
     assert len(appeal.json()['decisions'])==2
@@ -183,7 +188,9 @@ def test_stored_original_integrity_failure_is_retained(client):
     verification.process_next()
     result=client.get('/documents/'+id,headers=h).json()
     assert result['job']['state']=='failed' and 'fingerprint differs' in result['job']['error']
-    assert result['status']=='unverified'
+    assert result['status']=='flagged'
+    assert result['job']['result']['assessment']['state']=='conflicting_evidence'
+    assert client.post('/documents/'+id+'/recheck',headers=h).json()['status']=='flagged'
     assert client.get('/ledger',headers=h).json()==[]
 
 def test_workspace_search_pagination_and_ledger_isolation(client):

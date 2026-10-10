@@ -17,3 +17,10 @@ button:active:not(:disabled),a:active{filter:brightness(1.13)}.icon-button{min-w
 .auth-header-actions{display:flex;align-items:center;gap:24px}.skip-link{position:fixed;top:12px;left:12px;transform:translateY(-200%);background:#1c3970;color:white;border:1px solid #9fbeff;border-radius:8px;z-index:150;padding:13px 20px;font-size:13px}.skip-link:focus{transform:translateY(0)}@media(max-width:650px){.auth-header-actions{gap:12px}.auth-header-actions .text-link{font-size:9px}.auth-story>p,.hero-content p,.section-heading>p,.capability-card p,.process-list p,.integrity-section p,.faq-item p{font-size:14px}}
 
 .sidebar{overflow-y:auto;scrollbar-width:thin;scrollbar-color:#283e61 transparent}.sidebar>*{flex-shrink:0}@media(max-height:600px){.sidebar-note{display:none}.sidebar>.brand{margin-bottom:22px}.institution{margin-bottom:19px}.sidebar-bottom{padding-top:12px}}
+
+.authenticity-assessment{margin:18px 0;padding:22px;border:1px solid rgba(234,179,8,.45);border-radius:16px;background:rgba(234,179,8,.07)}
+.authenticity-assessment h4{font-size:21px;line-height:1.35;margin:10px 0}
+.authenticity-assessment p{line-height:1.65;margin:10px 0;overflow-wrap:anywhere}
+.authenticity-assessment small{display:block;line-height:1.6}
+.authenticity-assessment.conflicting_evidence{border-color:rgba(248,113,113,.65);background:rgba(248,113,113,.08)}
+.authenticity-assessment.source_match_review_required{border-color:rgba(94,234,212,.45);background:rgba(94,234,212,.07)}
