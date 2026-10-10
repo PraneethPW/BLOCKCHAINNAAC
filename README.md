@@ -22,6 +22,8 @@ GET /accreditation returns only visible cases. Institution accounts submit claim
 
 ## Verification
 
+Engine 3.4 retains up to 8,000 characters of first-page text for title consistency, including layouts that extract affiliations before the heading. Correction notices distinguish their own DOI from the "Correction to" relation. A correction's editable DOI metadata can select a publisher query, but only an exact independently retrieved publisher PDF match authenticates the file; a borrowed identifier or changed bytes cannot pass.
+
 Uploaded originals receive an exact SHA-256 fingerprint and a durable database job. A background worker records committed stages, timestamps, errors and provider results. PostgreSQL advisory locking serializes worker passes and interrupted jobs are retried after five minutes. Stored bytes are rehashed before processing; an integrity mismatch stops verification while retaining evidence.
 
 The worker extracts bounded native PDF text, runs Tesseract OCR on images and up to twelve scanned PDF pages, inspects PDF metadata, signature fields and active actions, detects duplicate fingerprints and repeated normalized text in the same institutional context. Reviewer-registered issuer records support exact-file comparisons and placement counts for matching institution/category/period. Originals are authenticated downloads, never executed inside the app.

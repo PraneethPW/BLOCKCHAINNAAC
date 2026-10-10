@@ -50,8 +50,14 @@ async def compare_publisher_original(data,metadata,category):
             original,final_url=await asyncio.wait_for(download_original(client,result['url']),timeout=25)
         pdf=PdfReader(io.BytesIO(original),strict=True)
         if pdf.is_encrypted or not 1<=len(pdf.pages)<=100:raise ValueError('Publisher original exceeds inspection limits.')
-        front=(pdf.pages[0].extract_text() or '')[:4500]
-        if result['doi'] not in ordered_dois(front):raise ValueError('Publisher PDF front-page DOI did not match the requested article.')
+        front=(pdf.pages[0].extract_text() or '')[:8000]
+        own_dois=ordered_dois(front)
+        if re.search(r'\b(?:author|publisher) correction\s*:',front,re.I):
+            related=ordered_dois(' '.join(re.findall(r'Correction to:[^\n]*',front,re.I)))
+            own_dois=[doi for doi in own_dois if doi not in related]
+            declared=ordered_dois(str((pdf.metadata or {}).get('/doi','')))
+            own_dois.extend(doi for doi in declared if doi not in related)
+        if result['doi'] not in own_dois:raise ValueError('Publisher PDF article DOI did not match the requested article.')
         digest=hashlib.sha256(original).hexdigest()
         same=digest==result['uploaded_sha256']
         result.update(state='matched' if same else 'different',url=final_url,publisher_sha256=digest,bytes=len(original),

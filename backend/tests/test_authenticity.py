@@ -2,6 +2,24 @@ import asyncio
 from authenticity import claims, declaration_checks, publication_checks, assessment, ordered_dois, pdf_structure, pdf_active_content
 
 
+def test_long_first_page_title_is_not_lost_after_affiliations():
+    title='SciPy 1.0: fundamental algorithms for scientific computing in Python'
+    front='10.1038/s41592-019-0686-2\n'+('University department affiliations. '*160)+'\n'+title+'\n2020'
+    claim=claims(front,{'front_page_text':front,'pdf_metadata':{'Title':title}})
+    record=dict(identifier='10.1038/s41592-019-0686-2',state='found',provider='Crossref',title=title,authors=[],year=2020)
+    assert any(c['name']=='Article title versus registry' and c['state']=='pass' for c in publication_checks(claim,[record],'Research publications'))
+
+
+def test_correction_to_doi_is_related_and_cannot_authenticate_the_correction():
+    front='Author Correction: Scientific computing in Python\nCorrection to: Nature Methods https://doi.org/10.1038/s41592-019-0686-2, published online 2020.'
+    without_metadata=claims(front,{'front_page_text':front})
+    assert without_metadata['primary_dois']==[]
+    assert without_metadata['related_dois']==['10.1038/s41592-019-0686-2']
+    declared=claims(front,{'front_page_text':front,'pdf_metadata':{'doi':'10.1038/s41592-020-0772-5'}})
+    assert declared['primary_dois']==['10.1038/s41592-020-0772-5']
+    assert declared['related_dois']==['10.1038/s41592-019-0686-2']
+
+
 def test_reference_dois_cannot_authenticate_an_article():
     content='Learning from graphs with graph neural networks\nEducational sample\nNot a published article\nReferences\nArray programming with NumPy https://doi.org/10.1038/s41586-020-2649-2'
     claim=claims(content,{})

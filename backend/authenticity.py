@@ -5,7 +5,7 @@ import unicodedata
 from datetime import datetime, timezone
 from pypdf import PdfReader
 
-ENGINE_VERSION = '3.3'
+ENGINE_VERSION = '3.4'
 
 
 def normal(value):
@@ -36,7 +36,16 @@ def claims(content, metadata):
     # Front-page DOI is only a claimed identifier; registry comparison still required.
     front_boundary = re.search(r'^\s*(?:references|bibliography|works cited)\s*$', front, re.I | re.M)
     front = front[:front_boundary.start()] if front_boundary else front
-    primary = ordered_dois(front[:4500])
+    # Amendments cite the corrected paper. It is a related identifier, not the
+    # identity of the correction itself. Editable metadata only selects a query;
+    # the independently fetched publisher bytes must still match to authenticate.
+    correction = bool(re.search(r'\b(?:author|publisher) correction\s*:', front, re.I))
+    related = ordered_dois(' '.join(re.findall(r'Correction to:[^\n]*', front, re.I))) if correction else []
+    primary = [doi for doi in ordered_dois(front[:4500]) if doi not in related]
+    if correction and not primary:
+        declared = ordered_dois(metadata.get('pdf_metadata', {}).get('doi', ''))
+        if len(declared) == 1 and declared[0] not in related:
+            primary = declared
     cited = [d for d in ordered_dois(references) if d not in primary]
     unclassified = [d for d in ordered_dois(body) if d not in primary]
     pdf = metadata.get('pdf_metadata', {})
@@ -54,7 +63,7 @@ def claims(content, metadata):
         query_title = ' '.join(lines)
     query_title = query_title[:240]
     if len(normal(query_title).split()) < 3:query_title = ''
-    return dict(front_matter=front[:4500], title=title, query_title=query_title, title_origin=title_origin, author=pdf.get('Author', ''), primary_dois=primary[:8], reference_dois=cited, unclassified_dois=unclassified, identifier_limit_exceeded=len(primary) > 8)
+    return dict(front_matter=front[:8000], title=title, query_title=query_title, title_origin=title_origin, author=pdf.get('Author', ''), primary_dois=primary[:8], related_dois=related, reference_dois=cited, unclassified_dois=unclassified, identifier_limit_exceeded=len(primary) > 8)
 
 
 def declaration_checks(content, metadata):

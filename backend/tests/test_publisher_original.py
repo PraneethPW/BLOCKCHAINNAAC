@@ -60,6 +60,23 @@ def test_unavailable_html_or_wrong_doi_publisher_pdf_never_authenticates(monkeyp
         assert asyncio.run(publisher.compare_publisher_original(data,metadata(),'Research publications'))['state']=='unavailable'
         monkeypatch.undo()
 
+
+def test_correction_metadata_is_only_a_query_and_changed_bytes_do_not_authenticate(monkeypatch):
+    doi='10.1038/s41592-020-0772-5'
+    buf=io.BytesIO();pdf=canvas.Canvas(buf)
+    pdf.setTitle('Author Correction: Scientific computing in Python')
+    pdf.drawString(40,780,'Author Correction: Scientific computing in Python')
+    pdf.drawString(40,750,'Correction to: https://doi.org/10.1038/s41592-019-0686-2')
+    pdf.showPage();pdf.save()
+    from pypdf import PdfReader,PdfWriter
+    writer=PdfWriter();writer.clone_document_from_reader(PdfReader(io.BytesIO(buf.getvalue())))
+    writer.add_metadata({'/doi':doi});official_buf=io.BytesIO();writer.write(official_buf);official=official_buf.getvalue()
+    install_transport(monkeypatch,lambda request:httpx.Response(200,content=official))
+    assert asyncio.run(publisher.compare_publisher_original(official,metadata([doi]),'Research publications'))['state']=='matched'
+    changed=official.replace(b'Scientific computing',b'Unverified computing',1)
+    assert changed!=official
+    assert asyncio.run(publisher.compare_publisher_original(changed,metadata([doi]),'Research publications'))['state']=='different'
+
 def test_full_job_verifies_publisher_file_without_accepting_institutional_claim(client,monkeypatch):
     owner=account(client);official=pdf_bytes()
     install_transport(monkeypatch,lambda request:httpx.Response(200,content=official))

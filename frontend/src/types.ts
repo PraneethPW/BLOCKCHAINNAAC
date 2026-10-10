@@ -1,5 +1,5 @@
 export type Status='unverified'|'flagged'|'verified'|'confirmed_fraud';
-export const CURRENT_ENGINE='3.3';
+export const CURRENT_ENGINE='3.4';
 export type Check={name:string;state:'pass'|'warn'|'unknown';detail:string;kind?:'processing'|'integrity'|'authenticity';blocking?:boolean;declarations?:string[]};
 export type AuthenticityAssessment={engine_version:string;state:'conflicting_evidence'|'source_match_review_required'|'not_established';headline:string;verification_eligible:boolean;blocking_checks:string[];missing_evidence:string[];explanation:string};
 export type Decision={id:string;outcome:string;reason:string;evidence:string;created_at:string;reviewer:string};

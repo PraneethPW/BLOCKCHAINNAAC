@@ -65,7 +65,7 @@ def inspect_bytes(data,ext):
         metadata['front_page_text']=(pdf.pages[0].extract_text() or '')[:8000] if pdf.pages else ''
         observations.extend(pdf_structure(data))
         observations.extend(signature_checks(data))
-        metadata['pdf_metadata']={str(k).lstrip('/'):str(v)[:500] for k,v in (pdf.metadata or {}).items() if str(k) in ['/CreationDate','/ModDate','/Producer','/Creator','/Author','/Title']}
+        metadata['pdf_metadata']={str(k).lstrip('/'):str(v)[:500] for k,v in (pdf.metadata or {}).items() if str(k) in ['/CreationDate','/ModDate','/Producer','/Creator','/Author','/Title','/doi']}
         fields=pdf.get_fields() or {}
         metadata['signature_fields']=sum(1 for v in fields.values() if v.get('/FT')=='/Sig')
         if metadata['signature_fields']:observations.append({'name':'PDF signature fields','state':'unknown','detail':f"Detected {metadata['signature_fields']} signature fields. Certificate trust, revocation and signer identity require issuer validation; field presence is not authentication."})
