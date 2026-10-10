@@ -96,6 +96,27 @@ def test_invalid_content_and_ai_consent(client,monkeypatch):
     monkeypatch.setenv('OPENROUTER_MODEL','paid-model')
     assert client.post(f"/documents/{d['id']}/ai",headers=h,json={'consent':True}).status_code==503
 
+def test_ai_empty_reply_and_advice_do_not_change_status(client,monkeypatch):
+    import httpx
+    h=account(client);d=upload(client,h)
+    monkeypatch.setenv('OPENROUTER_API_KEY','test-only-key')
+    monkeypatch.setenv('OPENROUTER_MODEL','dots-studio/dots-3-note-preview:free')
+    replies=[None,'Compare the reporting period and request issuer evidence.']
+    class FreeProvider:
+        def __init__(self,**kwargs):pass
+        async def __aenter__(self):return self
+        async def __aexit__(self,*args):pass
+        async def post(self,url,headers,json):
+            assert json['model'].endswith(':free')
+            assert json['provider']['data_collection']=='deny'
+            assert json['reasoning']['enabled'] is False
+            return httpx.Response(200,json={'choices':[{'message':{'content':replies.pop(0)}}]})
+    monkeypatch.setattr(main.httpx,'AsyncClient',FreeProvider)
+    assert client.post(f"/documents/{d['id']}/ai",headers=h,json={'consent':True}).status_code==503
+    response=client.post(f"/documents/{d['id']}/ai",headers=h,json={'consent':True})
+    assert response.status_code==200 and response.json()['ai']
+    assert response.json()['status']==d['status']
+
 def test_independent_placement_count_mismatch(client):
     h=account(client);r=account(client,'reviewer@example.com','reviewer');d=upload(client,h,b'Annual report: 100 students placed.')
     result=client.post('/trusted-records',headers=r,data={'college':'Test College','category':'Student placements','period':'2025-26','issuer':'Authorized Employer','reference':'Verified placement records REF-40','placements':'40'},files={'file':('source.txt',b'Independent employer records: 40 students placed.','text/plain')})

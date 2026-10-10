@@ -20,6 +20,7 @@ export default function App(){
  useEffect(()=>{if(!toast)return;const t=setTimeout(()=>setToast(''),4500);return()=>clearTimeout(t);},[toast]);
  useEffect(()=>{if(demo&&docs.length)localStorage.setItem('veris-demo-v1',JSON.stringify(docs));},[docs,demo]);
  useEffect(()=>{if(demo)setLedger(demoLedger(docs));},[docs,demo]);
+ useEffect(()=>{if(demo||view!=='workspace'||page!=='ledger'||!user)return;let active=true;const poll=async()=>{try{const records=await getLedger();if(active)setLedger(records);}catch(err){if(active)setError((err as Error).message);}};void poll();const timer=setInterval(poll,10000);return()=>{active=false;clearInterval(timer);};},[demo,view,page,user]);
  const enterDemo=(destination:Page='overview',caseId?:string)=>{const data=readDemo();setDemo(true);setUser(demoUser);setDocs(data);setView('workspace');setPage(destination);setSelected(caseId?data.find(d=>d.id===caseId)||null:null);window.scrollTo(0,0);};
  const goHome=()=>{setView('landing');window.scrollTo(0,0);};
  const refresh=async()=>{const [d,l]=await Promise.all([getDocs(),getLedger()]);setDocs(d);setLedger(l);return d;};

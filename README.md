@@ -63,9 +63,10 @@ The hosted prototype uses a private Ganache network (chain ID 1337) on Railway, 
 - Frontend: `pnpm build` in frontend.
 - API: `python -m pytest tests -q` in backend.
 - Contract: `pnpm compile` and `node test.mjs` in contracts.
+- Private worker: in contracts run `pnpm exec ganache --server.port 8545 --chain.chainId 1337 --wallet.totalAccounts 0 --logging.quiet`; in backend run `python tests/devnet_integration.py`. It uses a temporary SQLite database, synthetic evidence and an ephemeral writer. Checks deployment, confirmed and appeal receipts, idempotent crash recovery and wrong-chain rejection.
 
 API tests cover ownership isolation, reviewer permissions, evidence requirements, automated-check boundaries, placement-count mismatches, append-only appeals, report PDFs, invalid files, AI consent and paid-model rejection. Contract checks cover writer permissions, duplicate prevention, valid outcomes, appeal linkage and preserved history. A Neon integration smoke test uses synthetic data in a transaction that is rolled back.
 
 ## Remaining production work
 
-Institution identity is self-entered and needs authorized onboarding. Login throttling is per-process. Files use a private persistent volume; operational backup, encryption controls, malware scanning and retention require deployment policy. Real issuer APIs, cryptographic signer-chain validation, robust content similarity, consortium governance and immutable off-chain evidence storage remain future integrations. AI may be unavailable under rate limits or privacy constraints. This prototype is not certified production infrastructure.
+Institution identity is self-entered and needs authorized onboarding. Login throttling is per-process. Files use a private persistent volume; operational backup, encryption controls, malware scanning and retention require deployment policy. Real issuer APIs, cryptographic signer-chain validation, robust content similarity, consortium governance and immutable off-chain evidence storage remain future integrations. The hosted free model is dots-studio/dots-3-note-preview:free, with optional reasoning disabled for a concise advisory answer. Configure OPENROUTER_MODEL to another :free model or openrouter/free as availability changes. AI may be unavailable under rate limits or privacy constraints. This prototype is not certified production infrastructure.

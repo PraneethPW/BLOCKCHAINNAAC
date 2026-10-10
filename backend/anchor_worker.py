@@ -55,7 +55,7 @@ def process():
                     rid=opaque(a.id)
                     record=contract.functions.records(rid).call()
                     if record[4]!=0:
-                        if bytes(record[0])!=opaque(a.case_id) or bytes(record[1])!=bytes.fromhex(a.document_hash) or bytes(record[2])!=bytes.fromhex(a.evidence_hash) or bytes(record[3])!=opaque(a.parent_id) or record[5]!=(1 if a.outcome=='confirmed_fraud' else 2):raise RuntimeError('On-chain record mismatch; stop for investigation.')
+                        if bytes(record[0])!=opaque(a.case_id) or bytes(record[1])!=bytes.fromhex(a.document_hash) or bytes(record[2])!=bytes.fromhex(a.evidence_hash) or bytes(record[3])!=opaque(a.parent_id) or record[4]!=int(datetime.fromisoformat(a.timestamp).timestamp()) or record[5]!=(1 if a.outcome=='confirmed_fraud' else 2):raise RuntimeError('On-chain record mismatch; stop for investigation.')
                         # Recover a broadcast that succeeded before its DB acknowledgement.
                         logs=contract.events.DecisionAnchored().get_logs(from_block=start_block,argument_filters={'recordId':rid})
                         if not logs:raise RuntimeError('Record exists but its transaction could not be recovered.')
