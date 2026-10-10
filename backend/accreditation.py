@@ -16,7 +16,7 @@ from authenticity import ENGINE_VERSION, normal, assessment
 from main import (AccreditationClaim, ClaimReview, EvidenceSnapshot, Document,
                   Decision, SourceRecord, SourceMetric, VerificationJob, Anchor,
                   Archive, Account, STORAGE, canonical, now, uid, current,
-                  reviewer, db, get_document, visible_documents, job_json)
+                  reviewer, db, get_document, visible_documents, job_json, document_list_json)
 
 router = APIRouter()
 
@@ -139,11 +139,12 @@ def dossiers(u:Account=Depends(current),s:Session=Depends(db)):
     if claims:
         for job in s.scalars(select(VerificationJob).where(VerificationJob.document_id.in_(ids)).order_by(VerificationJob.created_at.desc())):jobs.setdefault(job.document_id,job)
     grouped={};cache={}
+    document_results={d['id']:d['verification_response'] for d in document_list_json(docs,s)}
     for d in docs:
         key=hashlib.sha256(canonical([d.owner_id,d.period]).encode()).hexdigest()[:24]
         group=grouped.setdefault(key,dict(id=key,institution=d.college,period=d.period,documents=[],claims=[],anchors=[]))
-        group['documents'].append({k:getattr(d,k) for k in ['id','filename','category','sha256','status','created_at']})
-        group['claims'].extend(claim_json(c,d,reviews[c.id],sources,metrics,cache,jobs.get(d.id)) for c in claims if c.document_id==d.id)
+        group['documents'].append({**{k:getattr(d,k) for k in ['id','filename','category','sha256','status','created_at']},'verification_response':document_results[d.id]})
+        group['claims'].extend({**claim_json(c,d,reviews[c.id],sources,metrics,cache,jobs.get(d.id)),'document_assessment':document_results[d.id]} for c in claims if c.document_id==d.id)
         group['anchors'].extend({k:getattr(a,k) for k in ['id','case_id','state','tx_hash','outcome']} for a in anchors if a.case_id==d.id)
     return dict(dossiers=list(grouped.values()),updated_at=now(),framework='Institution-declared criteria · independent accreditation prototype',institution_identity='Self-declared; official institutional onboarding is not connected',blockchain_scope='Confirmed document findings and linked appeals only')
 

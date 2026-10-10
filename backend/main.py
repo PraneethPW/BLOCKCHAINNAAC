@@ -221,6 +221,9 @@ def document_json(d,s,decisions=None,job=None,loaded=False):
             for i,event in enumerate(json.loads(item.timeline)):
                 activity.append(dict(id=item.id+'-'+str(i),kind='processing',title=event['stage'],detail='Run '+item.id,at=event['at'],actor='Verification service'))
             if item.state=='failed':activity.append(dict(id=item.id+'-failed',kind='processing',title='Verification failed',detail=item.error,at=item.updated_at,actor='Verification service'))
+            automatic=json.loads(item.result).get('automated_assessment')
+            if automatic:
+                activity.append(dict(id=item.id+'-assessment',kind='assessment',title=automatic['title'],detail=automatic['reason'],at=item.updated_at,actor='Verification engine '+json.loads(item.result).get('engine_version','')))
         for r in decisions or []:
             activity.append(dict(id=r.id,kind='decision',title='Reviewer decision: '+r.outcome.replace('_',' '),detail=r.reason,at=r.created_at,actor=r.reviewer,evidence=r.evidence))
         value['activity']=sorted(activity,key=lambda event:event['at'],reverse=True)
@@ -248,9 +251,9 @@ def run_checks(d,s,include_completed=True,inspection_metadata=None):
     source_intact=bool(source and (STORAGE/source.storage_name).is_file() and hashlib.sha256((STORAGE/source.storage_name).read_bytes()).hexdigest()==source.sha256)
     original_intact=(STORAGE/d.storage_name).is_file() and hashlib.sha256((STORAGE/d.storage_name).read_bytes()).hexdigest()==d.sha256
     if source and not source_intact:checks.append({'name':'Registered issuer source integrity','state':'warn','kind':'integrity','blocking':True,'detail':'The registered issuer file is missing or its bytes differ from its registered fingerprint. Restore validated issuer evidence before accepting any match.'})
-    if not original_intact:checks.append({'name':'Stored original integrity','state':'warn','kind':'integrity','blocking':True,'detail':'The stored original is missing or differs from the submitted fingerprint. Investigate storage integrity before accepting this record.'})
+    if not original_intact:checks.append({'name':'Stored original integrity','state':'warn','kind':'integrity','blocking':True,'integrity_failure':'changed' if (STORAGE/d.storage_name).is_file() else 'missing','detail':'The stored original differs from the submitted fingerprint.' if (STORAGE/d.storage_name).is_file() else 'The stored original is missing. Restore the original file before inspection.'})
     if source and not source_intact:source=None
-    checks.append({'name':'Authorized source comparison','state':'pass' if source else 'unknown','detail':f'Exact match to reviewer-registered source from {source.issuer}. Reference: {source.reference}. Human review still required.' if source else 'No matching authorized issuer record is available. Missing source evidence is not fraud.'})
+    checks.append({'name':'Authorized source comparison','state':'pass' if source else 'unknown','detail':f'Exact byte match to the intact registered issuer original from {source.issuer}. Reference: {source.reference}. This comparison authenticates the file against that registered source, not institutional claims.' if source else 'No matching authorized issuer record is available. Missing source evidence is not fraud.'})
     if d.category=='Student placements':
         numbers=set(int(x) for x in re.findall(r'(\d+)\s+(?:students?\s+)?(?:placed|placements)\b',d.text,re.I))
         numbers.update(int(x) for x in re.findall(r'\b(?:placements|students placed)\s*[:=\-]\s*(\d+)',d.text,re.I))
@@ -259,7 +262,7 @@ def run_checks(d,s,include_completed=True,inspection_metadata=None):
         state='unknown';detail='A single readable placement claim and an authorized count for the same reporting period are required.'
         if len(numbers)==1 and len(confirmed)==1:
             claim=next(iter(numbers));supported=next(iter(confirmed));state='pass' if claim==supported else 'warn'
-            detail=f'Extracted claim: {claim}. Reviewer-registered source count: {supported}. Period: {d.period}. '+('Counts agree; human review still required.' if claim==supported else 'The discrepancy requires investigation; it is not proof of fraud.')
+            detail=f'Extracted claim: {claim}. Registered issuer source count: {supported}. Period: {d.period}. '+('Counts agree in the available evidence.' if claim==supported else 'The discrepancy requires investigation; it is not proof of fraud.')
         elif len(numbers)>1 or len(confirmed)>1:
             state='warn';detail='Multiple different placement counts were found in the document or source records. Review the reporting context before comparing.'
         checks.append({'name':'Placement count comparison','state':state,'detail':detail})
@@ -273,9 +276,11 @@ def run_checks(d,s,include_completed=True,inspection_metadata=None):
     names={c['name'] for c in checks}
     if prior.get('engine_version')==ENGINE_VERSION:checks.extend(c for c in prior.get('checks',[]) if c['name'] not in names)
     d.checks=canonical(checks)
-    # Checks never override a human decision or mark a document verified.
+    # A completed current full inspection can automatically verify an issuer match.
+    # Historical human decisions remain append-only and are never overwritten.
     if not s.scalar(select(Decision).where(Decision.document_id==d.id)):
-        d.status='flagged' if any(c['state']=='warn' for c in checks) else 'unverified'
+        eligible=bool(latest and latest.state=='complete' and prior.get('engine_version')==ENGINE_VERSION and assessment(checks)['verification_eligible'])
+        d.status='verified' if eligible else 'flagged' if any(c['state']=='warn' for c in checks) else 'unverified'
     if prior.get('engine_version')==ENGINE_VERSION:
         prior['checks']=checks;prior['assessment']=assessment(checks);latest.result=canonical(prior)
 def extract(data, ext):
@@ -546,9 +551,10 @@ def evidence_report(id:str,u:Account=Depends(current),s:Session=Depends(db)):
         story.append(Paragraph(escape(str(text)).replace('\n','<br/>'),styles[style]));story.append(Spacer(1,9))
     paragraph('VERIS — Evidence report','Title')
     paragraph('Independent prototype. Not an official NAAC finding or accreditation grade.')
-    for k in ['id','filename','college','category','period','status','created_at','sha256']:paragraph(k.upper()+': '+str(data[k]))
+    for k in ['id','filename','college','category','period','created_at','sha256']:paragraph(k.upper()+': '+str(data[k]))
     response=data['verification_response']
     paragraph('Document result','Heading2');paragraph(response['title'])
+    paragraph('Result origin: '+response['mode']+' / '+response['outcome'])
     paragraph('Reason: '+response['reason']);paragraph('Required action: '+response['action'])
     paragraph('Verification checks','Heading2')
     for c in data['checks']:paragraph(f"{c['name']} [{c['state']}]: {c['detail']}")

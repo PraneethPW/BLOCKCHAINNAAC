@@ -83,7 +83,9 @@ def test_bibliography_only_job_never_queries_article_registries(client,monkeypat
     assert document['job']['result']['assessment']['state']=='conflicting_evidence'
     assert document['verification_response']['code']=='sample_document'
     assert document['verification_response']['acceptance']=='blocked'
-    assert 'Sample document' in document['verification_response']['title']
+    assert document['verification_response']['title']=='Non-original — sample document'
+    assert document['verification_response']['outcome']=='non_original'
+    assert document['job']['result']['automated_assessment']['outcome']=='non_original'
     client.post('/documents/'+r.json()['id']+'/recheck',headers=h)
     assert client.get('/documents/'+r.json()['id'],headers=h).json()['status']=='flagged'
 

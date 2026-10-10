@@ -5,7 +5,7 @@ import unicodedata
 from datetime import datetime, timezone
 from pypdf import PdfReader
 
-ENGINE_VERSION = '3.1'
+ENGINE_VERSION = '3.2'
 
 
 def normal(value):
@@ -189,11 +189,11 @@ def publication_checks(claim, results, category):
 
 
 def assessment(checks):
-    blocking = [c['name'] for c in checks if c.get('blocking') and c['state'] == 'warn']
+    blocking = [c['name'] for c in checks if (c.get('blocking') or c['name']=='Placement count comparison') and c['state'] == 'warn']
     source = next((c for c in checks if c['name'] == 'Authorized source comparison'), {})
     supported = source.get('state') == 'pass'
     return dict(engine_version=ENGINE_VERSION, state='conflicting_evidence' if blocking else 'source_match_review_required' if supported else 'not_established',
-                headline='Not accepted — conflicting evidence' if blocking else 'Issuer original matched — awaiting approval' if supported else 'Not verified — issuer evidence required',
+                headline='Conflicting evidence' if blocking else 'Genuine — matches registered issuer original' if supported else 'Neutral',
                 verification_eligible=supported and not blocking, blocking_checks=blocking,
                 missing_evidence=[] if supported else ['Exact file comparison to a reviewer-registered issuer source for the same institution, category and period'],
                 assessed_at=datetime.now(timezone.utc).isoformat(),

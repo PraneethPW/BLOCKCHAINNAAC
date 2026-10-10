@@ -11,6 +11,7 @@ from urllib.parse import quote
 import httpx
 from source_discovery import discover_title
 from pypdf import PdfReader
+from pypdf.errors import PdfReadError
 from sqlalchemy import select, text
 from authenticity import (ENGINE_VERSION, claims, ordered_dois, pdf_structure,
                           signature_checks, publication_checks, assessment, finding, pdf_active_content)
@@ -20,8 +21,41 @@ def normalize(value):return re.sub(r'\W+',' ',unicodedata.normalize('NFKC',value
 def extract_dois(content):
     return ordered_dois(content)[:8]
 
+class FileInspectionError(RuntimeError):
+    def __init__(self,message,category):
+        super().__init__(message)
+        self.category=category
+
+def inspect_format(data,ext):
+    """Separate proven format failures from locked files and service failures."""
+    if ext=='.pdf':
+        try:
+            pdf=PdfReader(io.BytesIO(data))
+            if pdf.is_encrypted:
+                raise FileInspectionError('The PDF is encrypted; upload an unlocked original for content inspection.','limited')
+            if len(pdf.pages)>100:
+                raise FileInspectionError('The PDF exceeds the 100-page inspection limit.','limited')
+            for page in pdf.pages:page.get_contents()
+        except (PdfReadError,ValueError,KeyError,TypeError,IndexError,EOFError) as exc:
+            raise FileInspectionError('PDF parsing failed: its objects, cross-reference data or page streams are invalid or incomplete.','corrupted') from exc
+    elif ext in ['.png','.jpg','.jpeg']:
+        from PIL import Image,UnidentifiedImageError
+        try:
+            image=Image.open(io.BytesIO(data))
+            if image.width*image.height>25_000_000:
+                raise FileInspectionError('The image exceeds the 25-megapixel inspection limit.','limited')
+            image.verify()
+            Image.open(io.BytesIO(data)).load()
+        except (UnidentifiedImageError,OSError,SyntaxError,ValueError) as exc:
+            raise FileInspectionError('Image decoding failed: the uploaded image is invalid, damaged or incomplete.','corrupted') from exc
+    elif ext=='.txt':
+        try:data.decode('utf-8',errors='strict')
+        except UnicodeDecodeError as exc:
+            raise FileInspectionError('The text encoding is not supported. Upload a UTF-8 original.','limited') from exc
+
 def inspect_bytes(data,ext):
     from main import extract
+    inspect_format(data,ext)
     metadata={'bytes':len(data),'format':ext.lstrip('.'),'extraction':'native text','pages':None,'signature_fields':0,'ocr_pages':0}
     observations=[]
     content=extract(data,ext)
@@ -157,15 +191,27 @@ def process_next():
                         checks.append(finding('Identifier coverage','unknown','Some identifiers were outside the front matter or exceeded the query limit. Their roles require manual review; no authenticity was inferred.'))
                     checks.append(finding('Institutional authorship','unknown','Publication metadata and author names do not establish that this institution produced or owns the submission. Obtain authorized institutional evidence.'))
                     doc.checks=canonical(checks)
-                    if not s.scalar(select(Decision).where(Decision.document_id==doc.id)) and any(c['state']=='warn' for c in checks):doc.status='flagged'
                     job.result=canonical({'engine_version':ENGINE_VERSION,'assessment':assessment(checks),'metadata':metadata,'sources':results,'searches':searches,'discovery_reason':discovery_reason,'checks':checks,'checked_at':timestamp(),'limitations':['Reference DOIs and related title search results do not authenticate the uploaded article.','Public registries do not establish institutional authorship.','Certificate trust and private issuer records require authorized access.']})
-                    job.state='complete';job.stage='Analysis finished — review required';job.progress=100;job.error='';job.updated_at=timestamp();job.timeline=canonical([*json.loads(job.timeline),{'stage':job.stage,'at':job.updated_at}]);s.commit()
+                    job.state='complete';job.progress=100;job.error='';job.updated_at=timestamp()
+                    record_automatic_assessment(doc,job)
+                    if not s.scalar(select(Decision).where(Decision.document_id==doc.id)):
+                        doc.status='verified' if json.loads(job.result)['automated_assessment']['outcome']=='genuine' else 'flagged' if any(c['state']=='warn' for c in checks) else 'unverified'
+                    job.timeline=canonical([*json.loads(job.timeline),{'stage':job.stage,'at':job.updated_at}]);s.commit()
                 except Exception as exc:
                     s.rollback();job=s.get(VerificationJob,job.id);job.state='failed';job.stage='Verification needs attention';job.error=str(exc) if isinstance(exc,RuntimeError) else 'Document processing failed. Check the file format and retry. Your original evidence is retained.';job.updated_at=timestamp()
                     doc=s.get(Document,job.document_id)
                     failure=finding('Original file integrity and processing','warn',job.error,blocking=True,kind='integrity')
                     doc.checks=canonical([failure])
                     if not s.scalar(select(Decision).where(Decision.document_id==doc.id)):doc.status='flagged'
-                    prior=json.loads(job.result);prior.update(engine_version=ENGINE_VERSION,assessment=assessment([failure]),checks=[failure]);job.result=canonical(prior);s.commit()
+                    prior=json.loads(job.result);prior.update(engine_version=ENGINE_VERSION,assessment=assessment([failure]),checks=[failure],failure_category=exc.category if isinstance(exc,FileInspectionError) else 'processing');job.result=canonical(prior)
+                    record_automatic_assessment(doc,job)
+                    job.timeline=canonical([*json.loads(job.timeline),{'stage':job.stage,'at':job.updated_at}]);s.commit()
         finally:
             if engine.dialect.name=='postgresql':lock.execute(text('SELECT pg_advisory_unlock(82917625)'))
+
+def record_automatic_assessment(doc,job):
+    from document_response import verification_response
+    from main import canonical,job_json
+    response=verification_response(dict(checks=json.loads(doc.checks),job=job_json(job),decisions=[],status='unverified',created_at=doc.created_at))
+    payload=json.loads(job.result);payload['automated_assessment']=response;job.result=canonical(payload)
+    job.stage='Automatic assessment: '+response['title']
