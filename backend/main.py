@@ -8,6 +8,8 @@ import threading
 import time
 import uuid
 import re
+import asyncio
+import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from contextlib import asynccontextmanager
@@ -106,6 +108,11 @@ class SourceMetric(Base):
     source_id: Mapped[str] = mapped_column(String(36), unique=True)
     name: Mapped[str] = mapped_column(String(40), default='placements')
     value: Mapped[int] = mapped_column(Integer)
+class NetworkConfig(Base):
+    __tablename__ = 'veris_network_config'
+    network: Mapped[str] = mapped_column(String(40), primary_key=True)
+    address: Mapped[str] = mapped_column(String(42))
+    start_block: Mapped[int] = mapped_column(Integer)
 def hash_password(password):
     salt=secrets.token_hex(16)
     key=hashlib.scrypt(password.encode(),salt=bytes.fromhex(salt),n=16384,r=8,p=1).hex()
@@ -200,7 +207,19 @@ def store_file(data,ext):
 async def lifespan(app):
     STORAGE.mkdir(parents=True,exist_ok=True)
     Base.metadata.create_all(engine)
-    yield
+    async def anchor_loop():
+        from anchor_worker import process
+        while True:
+            try: await asyncio.to_thread(process)
+            except Exception: logging.getLogger('veris').warning('Blockchain pass unavailable; queued evidence retained for retry.')
+            await asyncio.sleep(20)
+    task=asyncio.create_task(anchor_loop()) if os.getenv('AUTO_ANCHOR','false').lower()=='true' else None
+    try: yield
+    finally:
+        if task:
+            task.cancel()
+            try: await task
+            except asyncio.CancelledError: pass
 app=FastAPI(title='Veris Evidence API',description='Independent prototype. No official NAAC affiliation.',lifespan=lifespan)
 origins=os.getenv('FRONTEND_ORIGINS','http://127.0.0.1:5173,http://localhost:5173').split(',')
 app.add_middleware(CORSMiddleware,allow_origins=[v.strip() for v in origins],allow_credentials=False,allow_methods=['GET','POST'],allow_headers=['Authorization','Content-Type'])
@@ -237,7 +256,10 @@ class Review(BaseModel):
     evidence:str=Field(default='',max_length=5000)
 class Consent(BaseModel): consent:bool
 @app.get('/health')
-def health(): return {'status':'ok','prototype':True,'database':'postgresql' if DATABASE_URL.startswith('postgresql') else 'local-sqlite'}
+def health():
+    with SessionLocal() as s:
+        network=os.getenv('LEDGER_NETWORK','sepolia'); config=s.get(NetworkConfig,network)
+        return {'status':'ok','prototype':True,'database':'postgresql' if DATABASE_URL.startswith('postgresql') else 'local-sqlite','blockchain':{'network':network,'contract':config.address if config else os.getenv('LEDGER_CONTRACT_ADDRESS',''),'automatic':os.getenv('AUTO_ANCHOR','false').lower()=='true'}}
 @app.post('/auth/register',status_code=201)
 def register(body:Registration,s:Session=Depends(db)):
     email=str(body.email).lower()
@@ -339,7 +361,7 @@ async def assist(id:str,body:Consent,u:Account=Depends(current),s:Session=Depend
 def ledger(u:Account=Depends(current),s:Session=Depends(db)):
     q=select(Anchor).order_by(Anchor.timestamp.desc())
     if u.role!='reviewer':q=q.where(Anchor.case_id.in_(select(Document.id).where(Document.owner_id==u.id)))
-    return [{k:getattr(a,k) for k in ['id','case_id','document_hash','evidence_hash','outcome','timestamp','state','tx_hash']} for a in s.scalars(q)]
+    return [{**{k:getattr(a,k) for k in ['id','case_id','document_hash','evidence_hash','outcome','timestamp','state','tx_hash']},'network':os.getenv('LEDGER_NETWORK','sepolia')} for a in s.scalars(q)]
 @app.get('/documents/{id}/report')
 def evidence_report(id:str,u:Account=Depends(current),s:Session=Depends(db)):
     from reportlab.lib.styles import getSampleStyleSheet

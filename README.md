@@ -10,7 +10,7 @@ Independent working prototype. Not an official NAAC service. Does not issue accr
 - SHA-256 duplicate checks, exact issuer-file matches, and placement-count comparison with reviewer-registered source evidence for the same institution/category/period. A discrepancy starts an investigation, never a fraud finding.
 - PDF text extraction and Tesseract OCR for image uploads. Scanned PDFs without a text layer currently require conversion to images for OCR. Digital-signature certificate trust and revocation validation are explicitly reported as unavailable.
 - OpenRouter openrouter/free: explicit per-document consent, limited extracted text, provider data collection denied, and no paid-model fallback. AI is advisory and cannot change verification status.
-- Solidity append-only ledger plus a Sepolia anchoring worker. Only confirmed findings and later appeals are anchored. Opaque IDs and hashes go on-chain; files and review narratives stay off-chain.
+- Solidity append-only ledger plus a private Ethereum development network and Sepolia anchoring adapter. Only confirmed findings and later appeals are anchored. Opaque IDs and hashes go on-chain; files and review narratives stay off-chain.
 
 ## Local development
 
@@ -32,7 +32,7 @@ Run `python provision_reviewer.py` in a secure backend shell with DATABASE_URL s
 2. Reviewer registers authorized issuer evidence in workspace settings with the same exact institution/category/period and confirmed placement count `40`.
 3. Run checks again on the submission. The discrepancy is flagged; no blockchain entry is created.
 4. Reviewer investigates and records a decision with a supporting evidence reference. Only a confirmed fraud finding creates an anchoring outbox entry.
-5. A configured Sepolia worker anchors it. An upheld appeal appends a linked record and preserves the earlier finding.
+5. The configured blockchain worker anchors it. An upheld appeal appends a linked record and preserves the earlier finding.
 
 Issuer evidence is registered manually by authorized reviewers. No live NAAC, government or employer API connection is claimed. Matching files or counts do not independently verify every claim. Ambiguous counts remain investigative leads.
 
@@ -48,7 +48,7 @@ Required variables: DATABASE_URL, JWT_SECRET (random 32+ characters), APP_ENV=pr
 
 Tables use the veris_ prefix. Startup creates missing tables without changing unrelated data. Future schema changes require migrations. requirements.lock.txt records tested Windows package versions; the Linux Docker build uses requirements.txt because the Windows lock includes pywin32.
 
-## Sepolia blockchain
+## Blockchain networks
 
 In contracts, run `pnpm install`, `pnpm compile`, then `node test.mjs`. VerisLedger.json contains the compiled ABI and bytecode; backend/ledger_abi.json is used by the worker.
 
@@ -56,7 +56,7 @@ In a secure backend environment, configure SEPOLIA_RPC_URL and LEDGER_PRIVATE_KE
 
 Run `python anchor_worker.py` as a single scheduled/dedicated worker. Postgres advisory locking prevents concurrent passes. The signed public transaction is persisted before broadcast so interrupted sends can retry. A successful receipt is required for anchored status. Duplicate record IDs cannot overwrite records; appeals must reference the prior confirmed finding. The contract restricts writers and has no update/delete path.
 
-No wallet or deployed contract is configured by default. Entries remain visibly queued until configured. This is a test-network prototype; production needs finality monitoring, key custody, issuer governance and retention policies.
+The hosted prototype uses a private Ganache network (chain ID 1337) on Railway, without a public RPC. Its /data volume retains chain history. Set LEDGER_NETWORK=private-devnet, LEDGER_RPC_URL to the private RPC, a random LEDGER_PRIVATE_KEY, and AUTO_ANCHOR=true. The worker creates test currency and deploys the compiled contract once, storing its public address in Neon. Missing persisted contract code stops writes instead of silently resetting history. This centrally operated development network demonstrates real Ethereum receipts; it does not provide independent consortium trust. Sepolia remains available with LEDGER_NETWORK=sepolia. Never switch an existing ledger database between networks without an explicit migration. Production needs finality monitoring, key custody, independent validators, backup and retention policies.
 
 ## Validation
 

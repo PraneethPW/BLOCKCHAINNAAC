@@ -8,4 +8,5 @@ const c=output.contracts['VerisLedger.sol'].VerisLedger;
 const artifact={contractName:'VerisLedger',compiler:solc.version(),abi:c.abi,bytecode:'0x'+c.evm.bytecode.object};
 fs.writeFileSync('VerisLedger.json',JSON.stringify(artifact,null,2));
 fs.writeFileSync('../backend/ledger_abi.json',JSON.stringify(c.abi,null,2));
+fs.writeFileSync('../backend/ledger_contract.json',JSON.stringify(artifact,null,2));
 console.log('Compiled VerisLedger; ABI and bytecode saved.');
