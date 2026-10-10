@@ -9,6 +9,7 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from urllib.parse import quote
 import httpx
+from source_discovery import discover_title
 from pypdf import PdfReader
 from sqlalchemy import select, text
 from authenticity import (ENGINE_VERSION, claims, ordered_dois, pdf_structure,
@@ -88,14 +89,20 @@ async def public_record(client,provider,doi,document_text):
         matched=bool(title and normalize(title) in normalize(document_text))
         result.update(state='found',title=title[:1000],authors=authors[:30],publisher=str(publisher)[:500],year=year,title_in_document=matched,detail='DOI metadata retrieved directly from the registry. '+('The registry title is present in the uploaded text.' if matched else 'Compare the registry title, authors and claimed affiliation against the submitted evidence.'))
     except (httpx.HTTPError,ValueError,KeyError,IndexError,TypeError):result['detail']='The public registry could not be reached or returned an unsupported response. No finding was inferred.'
+    finally:result['checked_at']=timestamp()
     return result
 
-async def corroborate(dois,content):
+async def corroborate(dois,content,on_result=None):
     async with httpx.AsyncClient(timeout=12,follow_redirects=False) as client:
         # Only fixed registry hosts; uploaded URLs are never fetched.
         results=[]
+        async def query(provider,doi):
+            record=await public_record(client,provider,doi,content)
+            record['scope']='claimed_article'
+            if on_result:on_result(dict(provider=provider,mode='identifier',query=doi,url=record['url'],checked_at=record['checked_at'],state='unavailable' if record['state']=='unavailable' else 'complete',returned_count=int(record['state']=='found'),exact_title_count=0,detail=record['detail']),[record])
+            return record
         for doi in dois:
-            results.extend(await asyncio.gather(*(public_record(client,p,doi,content) for p in ['Crossref','DataCite','Europe PMC'])))
+            results.extend(await asyncio.gather(*(query(p,doi) for p in ['Crossref','DataCite','Europe PMC'])))
         return results
 
 def process_next():
@@ -117,9 +124,24 @@ def process_next():
                     if hashlib.sha256(data).hexdigest()!=doc.sha256:raise RuntimeError('Stored file fingerprint differs from the submission. Integrity investigation required.')
                     stage('Extracting text and examining file structure',25)
                     content,metadata,observations=inspect_bytes(data,file.suffix)
-                    stage('Corroborating identifiers with public registries',55)
-                    results=asyncio.run(corroborate(metadata['dois'],metadata['claims']['front_matter'])) if metadata['dois'] and doc.category=='Research publications' else []
-                    for result in results:result['scope']='claimed_article'
+                    stage('Searching public publication records' if doc.category=='Research publications' else 'Checking authorized issuer records',55)
+                    results=[];searches=[]
+                    discovery_reason=''
+                    job.result=canonical({'engine_version':ENGINE_VERSION,'metadata':metadata,'sources':[],'searches':[]});s.commit()
+                    def received(attempt,records):
+                        searches.append(attempt);results.extend(records)
+                        job.result=canonical({'engine_version':ENGINE_VERSION,'metadata':metadata,'sources':results,'searches':searches})
+                        expected=max(1,len(metadata['dois'])*3) if metadata['dois'] else 2
+                        message=f"{attempt['provider']}: "+('unavailable' if attempt['state']=='unavailable' else f"{attempt['returned_count']} record(s) returned")
+                        stage(message,min(78,55+int(23*len(searches)/expected)))
+                    if doc.category!='Research publications':
+                        discovery_reason='Publication registries do not verify this evidence category. An authorized issuer record is required.'
+                    elif metadata['dois']:
+                        asyncio.run(corroborate(metadata['dois'],metadata['claims']['front_matter'],received))
+                    elif metadata['claims']['query_title']:
+                        asyncio.run(discover_title(metadata['claims']['query_title'],received))
+                    else:
+                        discovery_reason='No usable article title or front-page DOI could be extracted. Provide a readable first page or issuer record.'
                     stage('Comparing evidence and institutional context',85)
                     s.refresh(doc,with_for_update=True);doc.text=content;run_checks(doc,s,include_completed=False,inspection_metadata=metadata)
                     checks=json.loads(doc.checks)+observations
@@ -136,14 +158,14 @@ def process_next():
                     checks.append(finding('Institutional authorship','unknown','Publication metadata and author names do not establish that this institution produced or owns the submission. Obtain authorized institutional evidence.'))
                     doc.checks=canonical(checks)
                     if not s.scalar(select(Decision).where(Decision.document_id==doc.id)) and any(c['state']=='warn' for c in checks):doc.status='flagged'
-                    job.result=canonical({'engine_version':ENGINE_VERSION,'assessment':assessment(checks),'metadata':metadata,'sources':results,'checks':checks,'checked_at':timestamp(),'limitations':['Reference DOIs do not authenticate the uploaded article.','Public registries do not establish institutional authorship.','Certificate trust and private issuer records require authorized access.']})
-                    job.state='complete';job.stage='Ready for evidence review';job.progress=100;job.error='';job.updated_at=timestamp();job.timeline=canonical([*json.loads(job.timeline),{'stage':job.stage,'at':job.updated_at}]);s.commit()
+                    job.result=canonical({'engine_version':ENGINE_VERSION,'assessment':assessment(checks),'metadata':metadata,'sources':results,'searches':searches,'discovery_reason':discovery_reason,'checks':checks,'checked_at':timestamp(),'limitations':['Reference DOIs and related title search results do not authenticate the uploaded article.','Public registries do not establish institutional authorship.','Certificate trust and private issuer records require authorized access.']})
+                    job.state='complete';job.stage='Analysis finished — review required';job.progress=100;job.error='';job.updated_at=timestamp();job.timeline=canonical([*json.loads(job.timeline),{'stage':job.stage,'at':job.updated_at}]);s.commit()
                 except Exception as exc:
                     s.rollback();job=s.get(VerificationJob,job.id);job.state='failed';job.stage='Verification needs attention';job.error=str(exc) if isinstance(exc,RuntimeError) else 'Document processing failed. Check the file format and retry. Your original evidence is retained.';job.updated_at=timestamp()
                     doc=s.get(Document,job.document_id)
                     failure=finding('Original file integrity and processing','warn',job.error,blocking=True,kind='integrity')
                     doc.checks=canonical([failure])
                     if not s.scalar(select(Decision).where(Decision.document_id==doc.id)):doc.status='flagged'
-                    job.result=canonical({'engine_version':ENGINE_VERSION,'assessment':assessment([failure]),'checks':[failure]});s.commit()
+                    prior=json.loads(job.result);prior.update(engine_version=ENGINE_VERSION,assessment=assessment([failure]),checks=[failure]);job.result=canonical(prior);s.commit()
         finally:
             if engine.dialect.name=='postgresql':lock.execute(text('SELECT pg_advisory_unlock(82917625)'))

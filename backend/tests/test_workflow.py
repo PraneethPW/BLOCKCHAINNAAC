@@ -162,6 +162,8 @@ def test_invitation_is_single_use_and_invalid_invite_rolls_back(client):
 
 def test_durable_job_and_archive_visibility(client,monkeypatch):
     import verification
+    async def title_search(title,on_result):return [],[]
+    monkeypatch.setattr(verification,'discover_title',title_search)
     owner=account(client)
     r=client.post('/documents?background=true',headers=owner,data={'category':'Research publications','period':'2026'},files={'file':('original.txt',b'Original public research evidence without a DOI.','text/plain')})
     assert r.status_code==201 and r.json()['job']['state']=='queued'

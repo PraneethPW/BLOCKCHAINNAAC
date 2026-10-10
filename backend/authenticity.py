@@ -5,7 +5,7 @@ import unicodedata
 from datetime import datetime, timezone
 from pypdf import PdfReader
 
-ENGINE_VERSION = '3.0'
+ENGINE_VERSION = '3.1'
 
 
 def normal(value):
@@ -40,7 +40,21 @@ def claims(content, metadata):
     cited = [d for d in ordered_dois(references) if d not in primary]
     unclassified = [d for d in ordered_dois(body) if d not in primary]
     pdf = metadata.get('pdf_metadata', {})
-    return dict(front_matter=front[:4500], title=pdf.get('Title', ''), author=pdf.get('Author', ''), primary_dois=primary[:8], reference_dois=cited, unclassified_dois=unclassified, identifier_limit_exceeded=len(primary) > 8)
+    title = pdf.get('Title', '')
+    query_title = re.split(r'\s+[-–—|]\s+(?:educational|sample|demonstration)', title, flags=re.I)[0].strip()
+    title_origin = 'PDF title metadata'
+    if not query_title or normal(query_title) in ['untitled', 'document', 'microsoft word']:
+        title_origin = 'First-page heading (inferred)'
+        lines = []
+        for line in front.splitlines()[:12]:
+            line = line.strip()
+            if re.match(r'^(?:abstract|authors?\b|references|educational\b|not a published\b|article type|prepared\b|doi\b|https?://)', line, re.I):break
+            if len(line) >= 12 and not re.fullmatch(r'[\d\W]+', line):lines.append(line)
+            if len(lines) == 2:break
+        query_title = ' '.join(lines)
+    query_title = query_title[:240]
+    if len(normal(query_title).split()) < 3:query_title = ''
+    return dict(front_matter=front[:4500], title=title, query_title=query_title, title_origin=title_origin, author=pdf.get('Author', ''), primary_dois=primary[:8], reference_dois=cited, unclassified_dois=unclassified, identifier_limit_exceeded=len(primary) > 8)
 
 
 def declaration_checks(content, metadata):
@@ -51,9 +65,11 @@ def declaration_checks(content, metadata):
                'layout demonstration', 'writing demonstration', 'fictional document',
                'synthetic document', 'sample document', 'for demonstration only']
     hits = [phrase for phrase in phrases if phrase in context]
-    return [finding('Document purpose declarations', 'warn' if hits else 'unknown',
+    result = finding('Document purpose declarations', 'warn' if hits else 'unknown',
                     'The cover or PDF metadata declares: ' + ', '.join(hits) + '. This conflicts with submission as original published or institutional evidence; review the claimed purpose.' if hits else
-                    'No explicit demonstration declaration was detected. Its absence does not establish authenticity.', blocking=bool(hits))]
+                    'No explicit demonstration declaration was detected. Its absence does not establish authenticity.', blocking=bool(hits))
+    result['declarations'] = hits
+    return [result]
 
 
 def pdf_structure(data):

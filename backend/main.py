@@ -179,6 +179,20 @@ def document_json(d,s,decisions=None,job=None,loaded=False):
         job=s.scalar(select(VerificationJob).where(VerificationJob.document_id==d.id).order_by(VerificationJob.created_at.desc()))
     value['decisions']=[{k:getattr(r,k) for k in ['id','outcome','reason','evidence','created_at','reviewer']} for r in decisions or []]
     value['job']=job_json(job) if job else None
+    # Detailed records include durable events from every retained verification run.
+    # Automated stages are explicitly separate from authorized human decisions.
+    if not loaded:
+        jobs=list(s.scalars(select(VerificationJob).where(VerificationJob.document_id==d.id).order_by(VerificationJob.created_at.desc()).limit(20)))
+        activity=[dict(id='upload-'+d.id,kind='upload',title='Original document uploaded',detail=d.filename,at=d.created_at,actor='Institution submission')]
+        for item in jobs:
+            activity.append(dict(id=item.id+'-queued',kind='processing',title='Verification queued',detail='Run '+item.id,at=item.created_at,actor='Verification service'))
+            for i,event in enumerate(json.loads(item.timeline)):
+                activity.append(dict(id=item.id+'-'+str(i),kind='processing',title=event['stage'],detail='Run '+item.id,at=event['at'],actor='Verification service'))
+            if item.state=='failed':activity.append(dict(id=item.id+'-failed',kind='processing',title='Verification failed',detail=item.error,at=item.updated_at,actor='Verification service'))
+        for r in decisions or []:
+            activity.append(dict(id=r.id,kind='decision',title='Reviewer decision: '+r.outcome.replace('_',' '),detail=r.reason,at=r.created_at,actor=r.reviewer,evidence=r.evidence))
+        value['activity']=sorted(activity,key=lambda event:event['at'],reverse=True)
+        value['activity_run_limit']=20
     return value
 
 def document_list_json(documents,s):
@@ -194,7 +208,7 @@ def visible_documents(u):
     q=select(Document).where(~Document.id.in_(select(Archive.id).where(Archive.kind=='document')))
     return q if u.role=='reviewer' else q.where(Document.owner_id==u.id)
 def run_checks(d,s,include_completed=True,inspection_metadata=None):
-    from authenticity import declaration_checks, assessment
+    from authenticity import ENGINE_VERSION, declaration_checks, assessment
     checks=[{'name':'SHA-256 fingerprint','state':'pass','kind':'processing','detail':'Calculated from the exact uploaded bytes. This records identity after submission; it does not establish that the file was genuine before upload.'}]
     duplicate=s.scalar(select(Document).where(Document.sha256==d.sha256,Document.id!=d.id,~Document.id.in_(select(Archive.id))))
     checks.append({'name':'Duplicate fingerprint','state':'warn' if duplicate else 'pass','kind':'processing','detail':'A matching submission exists; context needs authorized review.' if duplicate else 'No identical fingerprint in the current registry. New files can still be fabricated.'})
@@ -225,12 +239,12 @@ def run_checks(d,s,include_completed=True,inspection_metadata=None):
     metadata=inspection_metadata or prior.get('metadata',{})
     checks.extend(declaration_checks(d.text,metadata))
     names={c['name'] for c in checks}
-    if prior.get('engine_version')=='3.0':checks.extend(c for c in prior.get('checks',[]) if c['name'] not in names)
+    if prior.get('engine_version')==ENGINE_VERSION:checks.extend(c for c in prior.get('checks',[]) if c['name'] not in names)
     d.checks=canonical(checks)
     # Checks never override a human decision or mark a document verified.
     if not s.scalar(select(Decision).where(Decision.document_id==d.id)):
         d.status='flagged' if any(c['state']=='warn' for c in checks) else 'unverified'
-    if prior.get('engine_version')=='3.0':
+    if prior.get('engine_version')==ENGINE_VERSION:
         prior['checks']=checks;prior['assessment']=assessment(checks);latest.result=canonical(prior)
 def extract(data, ext):
     try:
@@ -339,9 +353,10 @@ class PasswordChange(BaseModel):
     new_password:str=Field(min_length=12,max_length=200)
 @app.get('/health')
 def health():
+    from authenticity import ENGINE_VERSION
     with SessionLocal() as s:
         network=os.getenv('LEDGER_NETWORK','sepolia'); config=s.get(NetworkConfig,network)
-        return {'status':'ok','prototype':True,'verification_engine':'3.0','database':'postgresql' if DATABASE_URL.startswith('postgresql') else 'local-sqlite','blockchain':{'network':network,'contract':config.address if config else os.getenv('LEDGER_CONTRACT_ADDRESS',''),'automatic':os.getenv('AUTO_ANCHOR','false').lower()=='true'}}
+        return {'status':'ok','prototype':True,'verification_engine':ENGINE_VERSION,'database':'postgresql' if DATABASE_URL.startswith('postgresql') else 'local-sqlite','blockchain':{'network':network,'contract':config.address if config else os.getenv('LEDGER_CONTRACT_ADDRESS',''),'automatic':os.getenv('AUTO_ANCHOR','false').lower()=='true'}}
 @app.post('/auth/register',status_code=201)
 def register(body:Registration,s:Session=Depends(db)):
     email=str(body.email).lower()
@@ -511,11 +526,17 @@ def evidence_report(id:str,u:Account=Depends(current),s:Session=Depends(db)):
             paragraph(assessment_result['explanation'])
             for item in assessment_result.get('blocking_checks',[]):paragraph('Blocking finding: '+item)
             for item in assessment_result.get('missing_evidence',[]):paragraph('Required evidence: '+item)
+        for query in job.get('result',{}).get('searches',[]):
+            paragraph(f"Search: {query['provider']} / {query['state']}\nQuery: {query['query']}\nChecked: {query['checked_at']}\nRecords returned: {query['returned_count']}\nSource: {query['url']}\nResult: {query['detail']}")
+        if job.get('result',{}).get('discovery_reason'):paragraph(job['result']['discovery_reason'])
         for r in job.get('result',{}).get('sources',[]):
             paragraph(f"{r['provider']} / {r['state']} / Scope: {r.get('scope','unclassified legacy identifier')} / DOI: {r['identifier']}\nChecked: {r['checked_at']}\nSource: {r['url']}\nTitle: {r.get('title','')}\nAuthors: {', '.join(r.get('authors',[]))}\nResult: {r['detail']}\nNotice: {r.get('notice','none')}")
         for t in job.get('timeline',[]):paragraph(t['at']+' / '+t['stage'])
         paragraph('Public metadata corroboration does not establish institutional authorship. Cryptographic signer trust and private issuer records require authorized access.')
+    paragraph('Activity (latest 20 verification runs)','Heading2')
+    for event in data.get('activity',[]):paragraph(f"{event['at']} / {event['actor']} / {event['title']}\n{event['detail']}")
     paragraph('Authorized decisions','Heading2')
+    if not data['decisions']:paragraph('No authorized reviewer decision has been recorded.')
     for r in data['decisions']:paragraph(f"{r['created_at']} — {r['reviewer']} — {r['outcome']}\nReason: {r['reason']}\nEvidence: {r['evidence']}")
     for a in s.scalars(select(Anchor).where(Anchor.case_id==id)):paragraph(f'Ledger: {a.state}\nEvidence hash: {a.evidence_hash}\nTransaction: {a.tx_hash or "not yet anchored"}')
     if d.ai:paragraph('AI advisory note (not a verification decision)','Heading2');paragraph(d.ai)

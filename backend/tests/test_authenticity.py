@@ -70,6 +70,10 @@ def test_bibliography_only_job_never_queries_article_registries(client,monkeypat
     async def forbidden(*args):
         raise AssertionError('Reference DOI must not launch article authentication')
     monkeypatch.setattr(verification,'corroborate',forbidden)
+    async def title_search(title,on_result):
+        assert title=='Learning from graphs'
+        return [],[]
+    monkeypatch.setattr(verification,'discover_title',title_search)
     r=client.post('/documents?background=true',headers=h,data={'category':'Research publications','period':'2026'},files={'file':('sample.txt',content,'text/plain')})
     verification.process_next()
     document=client.get('/documents/'+r.json()['id'],headers=h).json()
