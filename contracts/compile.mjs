@@ -1,0 +1,11 @@
+import fs from 'node:fs';
+import solc from 'solc';
+const input={language:'Solidity',sources:{'VerisLedger.sol':{content:fs.readFileSync('VerisLedger.sol','utf8')}},settings:{optimizer:{enabled:true,runs:200},evmVersion:'shanghai',outputSelection:{'*':{'*':['abi','evm.bytecode.object']}}}};
+const output=JSON.parse(solc.compile(JSON.stringify(input)));
+const errors=(output.errors||[]).filter(e=>e.severity==='error');
+if(errors.length)throw new Error(errors.map(e=>e.formattedMessage).join('\n'));
+const c=output.contracts['VerisLedger.sol'].VerisLedger;
+const artifact={contractName:'VerisLedger',compiler:solc.version(),abi:c.abi,bytecode:'0x'+c.evm.bytecode.object};
+fs.writeFileSync('VerisLedger.json',JSON.stringify(artifact,null,2));
+fs.writeFileSync('../backend/ledger_abi.json',JSON.stringify(c.abi,null,2));
+console.log('Compiled VerisLedger; ABI and bytecode saved.');

@@ -1,0 +1,14 @@
+fastapi>=0.115,<1
+uvicorn[standard]>=0.34,<1
+sqlalchemy>=2.0,<3
+psycopg[binary]>=3.2,<4
+python-multipart>=0.0.20,<1
+PyJWT>=2.10,<3
+httpx>=0.28,<1
+pypdf>=5,<7
+Pillow>=11,<13
+pytesseract>=0.3.13,<1
+reportlab>=4,<5
+web3>=7,<8
+pytest>=8,<10
+email-validator>=2,<3

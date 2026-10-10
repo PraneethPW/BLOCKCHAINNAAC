@@ -1,0 +1,1 @@
+{"name":"veris-ledger","private":true,"type":"module","scripts":{"compile":"node compile.mjs"},"devDependencies":{"solc":"0.8.30","ethers":"^6.15.0","ganache":"^7.9.2"}}

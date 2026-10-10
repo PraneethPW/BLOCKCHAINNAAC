@@ -1,0 +1,22 @@
+import fs from 'node:fs';
+import assert from 'node:assert/strict';
+import ganache from 'ganache';
+import {BrowserProvider,ContractFactory,sha256,toUtf8Bytes,ZeroHash} from 'ethers';
+const provider=new BrowserProvider(ganache.provider({logging:{quiet:true},chain:{hardfork:'shanghai'}}));
+const signer=await provider.getSigner();const other=await provider.getSigner(1);
+const artifact=JSON.parse(fs.readFileSync('VerisLedger.json','utf8'));
+const contract=await new ContractFactory(artifact.abi,artifact.bytecode,signer).deploy();await contract.waitForDeployment();
+const hash=s=>sha256(toUtf8Bytes(s));const ts=Math.floor(Date.now()/1000);let checks=0;
+async function rejected(fn){let fail=false;try{await fn();}catch{fail=true;}assert.ok(fail);checks++;}
+await rejected(()=>contract.connect(other).anchor(hash('unauthorized'),hash('case'),hash('doc'),hash('evidence'),ZeroHash,ts,1));
+await rejected(()=>contract.anchor(hash('invalid'),hash('case'),hash('doc'),hash('evidence'),ZeroHash,ts,0));
+await rejected(()=>contract.anchor(hash('orphan-appeal'),hash('case'),hash('doc'),hash('evidence'),ZeroHash,ts,2));
+await (await contract.anchor(hash('first'),hash('case'),hash('doc'),hash('evidence'),ZeroHash,ts,1)).wait();
+assert.equal((await contract.records(hash('first'))).outcome,1n);checks++;
+await rejected(()=>contract.anchor(hash('first'),hash('case'),hash('modified'),hash('evidence'),ZeroHash,ts,1));
+await rejected(()=>contract.anchor(hash('wrong-parent'),hash('other-case'),hash('doc'),hash('appeal-evidence'),hash('first'),ts,2));
+await (await contract.anchor(hash('appeal'),hash('case'),hash('doc'),hash('appeal-evidence'),hash('first'),ts,2)).wait();
+assert.equal((await contract.records(hash('first'))).outcome,1n);assert.equal((await contract.records(hash('appeal'))).outcome,2n);checks++;
+await (await contract.setWriter(await other.getAddress(),true)).wait();
+await (await contract.connect(other).anchor(hash('second'),hash('case2'),hash('doc'),hash('evidence'),ZeroHash,ts,1)).wait();checks++;
+console.log(`${checks} contract checks passed: authorization, valid outcomes, duplicate prevention, appeal linkage, preserved history.`);
