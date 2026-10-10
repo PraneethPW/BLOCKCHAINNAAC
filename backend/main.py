@@ -142,6 +142,36 @@ class VerificationJob(Base):
     result: Mapped[str] = mapped_column(Text,default='{}')
     error: Mapped[str] = mapped_column(Text,default='')
     timeline: Mapped[str] = mapped_column(Text,default='[]')
+
+class AccreditationClaim(Base):
+    __tablename__ = 'veris_accreditation_claims'
+    id: Mapped[str] = mapped_column(String(36),primary_key=True,default=uid)
+    document_id: Mapped[str] = mapped_column(String(36),index=True)
+    owner_id: Mapped[str] = mapped_column(String(36),index=True)
+    criterion: Mapped[str] = mapped_column(String(80))
+    statement: Mapped[str] = mapped_column(Text)
+    issuer: Mapped[str] = mapped_column(String(200))
+    quantity: Mapped[int | None] = mapped_column(Integer,nullable=True)
+    created_at: Mapped[str] = mapped_column(String(40),default=now)
+
+class ClaimReview(Base):
+    __tablename__ = 'veris_claim_reviews'
+    id: Mapped[str] = mapped_column(String(36),primary_key=True,default=uid)
+    claim_id: Mapped[str] = mapped_column(String(36),index=True)
+    reviewer_id: Mapped[str] = mapped_column(String(36))
+    reviewer: Mapped[str] = mapped_column(String(100))
+    outcome: Mapped[str] = mapped_column(String(30))
+    reason: Mapped[str] = mapped_column(Text)
+    evidence: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[str] = mapped_column(String(40),default=now)
+
+class EvidenceSnapshot(Base):
+    __tablename__ = 'veris_evidence_snapshots'
+    id: Mapped[str] = mapped_column(String(36),primary_key=True)
+    document_id: Mapped[str] = mapped_column(String(36),index=True)
+    payload: Mapped[str] = mapped_column(Text)
+    digest: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[str] = mapped_column(String(40),default=now)
 def hash_password(password):
     salt=secrets.token_hex(16)
     key=hashlib.scrypt(password.encode(),salt=bytes.fromhex(salt),n=16384,r=8,p=1).hex()
@@ -473,7 +503,8 @@ def decide(id:str,body:Review,u:Account=Depends(reviewer),s:Session=Depends(db))
     s.add(r)
     if body.outcome in ['confirmed_fraud','appeal_upheld']:
         previous=s.scalar(select(Anchor).where(Anchor.case_id==id).order_by(Anchor.timestamp.desc()))
-        evidence_hash=hashlib.sha256(canonical({'decision_id':r.id,'reason':r.reason,'evidence':r.evidence,'reviewer_id':u.id,'outcome':r.outcome,'timestamp':r.created_at}).encode()).hexdigest()
+        from accreditation import seal_decision
+        evidence_hash=seal_decision(d,r,s)
         s.add(Anchor(id=r.id,case_id=id,document_hash=d.sha256,evidence_hash=evidence_hash,outcome=r.outcome,timestamp=r.created_at,parent_id=previous.id if previous else ''))
     d.status='verified' if body.outcome=='appeal_upheld' else body.outcome
     s.commit();return document_json(d,s)
@@ -549,8 +580,14 @@ def workspace_revision(u,s):
     anchors=list(s.execute(select(Anchor.id,Anchor.state,Anchor.tx_hash).where(Anchor.case_id.in_(ids))))
     jobs=list(s.execute(select(VerificationJob.id,VerificationJob.state,VerificationJob.progress,VerificationJob.updated_at).where(VerificationJob.document_id.in_(ids))))
     decisions=list(s.execute(select(Decision.id).where(Decision.document_id.in_(ids))))
-    sources=list(s.execute(select(SourceRecord.id).where(~SourceRecord.id.in_(select(Archive.id))))) if u.role=='reviewer' else []
-    return hashlib.sha256(canonical([sorted([list(r) for r in items]) for items in [docs,anchors,jobs,decisions,sources]]).encode()).hexdigest()
+    claim_ids=select(AccreditationClaim.id).where(AccreditationClaim.document_id.in_(ids))
+    claims=list(s.execute(select(AccreditationClaim.id).where(AccreditationClaim.id.in_(claim_ids))))
+    claim_reviews=list(s.execute(select(ClaimReview.id).where(ClaimReview.claim_id.in_(claim_ids))))
+    source_query=select(SourceRecord.id).where(~SourceRecord.id.in_(select(Archive.id)))
+    if u.role!='reviewer':
+        source_query=source_query.join(Document,(SourceRecord.college==Document.college)&(SourceRecord.category==Document.category)&(SourceRecord.period==Document.period)).where(Document.id.in_(ids)).distinct()
+    sources=list(s.execute(source_query))
+    return hashlib.sha256(canonical([sorted([list(r) for r in items]) for items in [docs,anchors,jobs,decisions,sources,claims,claim_reviews]]).encode()).hexdigest()
 
 @app.get('/workspace')
 def workspace(offset:int=0,search:str='',status:str='',review_only:bool=False,u:Account=Depends(current),s:Session=Depends(db)):
@@ -599,3 +636,6 @@ def source_file(id:str,u:Account=Depends(reviewer),s:Session=Depends(db)):
     path=STORAGE/r.storage_name
     if not path.is_file():raise HTTPException(404,'Source file unavailable.')
     return Response(path.read_bytes(),media_type='application/octet-stream',headers={'Content-Disposition':'attachment; filename="authorized-source'+path.suffix+'"'})
+
+from accreditation import router as accreditation_router
+app.include_router(accreditation_router)

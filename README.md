@@ -12,6 +12,14 @@ Institution registration, login, logout and password changes use scrypt password
 
 Use your own account. Issue a private reviewer invitation from an authorized backend shell with python provision_invitation.py --days 7. Do not publish invitation codes. No reviewer role selector is available to public users. Institution identity is self-entered until an authorized onboarding process is connected; email ownership verification and recovery email are not configured.
 
+## Accreditation cases and institutional claims
+
+The workspace starts with actual institutional reporting cases, grouped by submitting account and period. Each immutable claim declares its criterion reference, statement, expected issuer and supporting document. Criterion references are supplied by the institution; the prototype does not embed an official NAAC assessment framework. Existing uploads appear as evidence without inventing claims for them.
+
+Student placement quantities are compared across the institution's stated count, readable document text and reviewer-registered evidence from the declared issuer in the same institution/category/period. Missing, ambiguous, changed or conflicting issuer evidence cannot support a claim. Other claim types use original-file corroboration and substantive human review; there is no universal semantic authenticity classifier. A supported claim requires a verified original, a completed current-engine job, intact exact issuer evidence and agreement on any structured count. Review outcomes and reasons append to claim history. Insufficient evidence or clarification requests do not establish fraud or create blockchain findings.
+
+GET /accreditation returns only visible cases. Institution accounts submit claims using POST /accreditation/claims. Invited reviewers append decisions using POST /accreditation/claims/{id}/reviews. Claims have no editing or deletion endpoint. Workspace SSE revisions include actual claim submissions and review events.
+
 ## Verification
 
 Uploaded originals receive an exact SHA-256 fingerprint and a durable database job. A background worker records committed stages, timestamps, errors and provider results. PostgreSQL advisory locking serializes worker passes and interrupted jobs are retried after five minutes. Stored bytes are rehashed before processing; an integrity mismatch stops verification while retaining evidence.
@@ -52,9 +60,17 @@ This network produces real Ethereum receipts but is centrally operated developme
 
 Contract commands in contracts: pnpm install, pnpm compile, node test.mjs. Backend anchoring: python anchor_worker.py. The contract restricts writers, prevents duplicate IDs and validates appeal linkage. It has no record update or delete path.
 
+New confirmed findings and upheld appeals create a canonical, private review-time snapshot of the institution, period, original fingerprint, claim declarations/reviews, verification results and provider responses, registered issuer records/counts, and reviewer decision. The snapshot SHA-256 becomes the contract's evidenceHash; private fields are not put on-chain. The snapshot, decision and queued anchor are committed atomically. Older records preserve their original decision-narrative digest and are explicitly labeled as legacy; historical evidence is never reconstructed as if it had been sealed.
+
+The audit trail's Check receipt & evidence action rehashes current originals, issuer evidence and the stored snapshot, checks preserved institutional/claim/decision context, and reads the actual RPC chain, receipt, canonical block, emitted event and contract record. A changed database row, unrelated successful receipt or changed evidence cannot produce a positive audit match. A valid audit proves consistency with the sealed review evidence; it does not prove the review was correct. An unavailable RPC or pending transaction is displayed without inferring a match.
+
+Export audit proof downloads an authenticated JSON bundle with the exact canonical snapshot and expected contract fields. A separate verifier can use python backend/verify_receipt.py proof.json --rpc YOUR_NETWORK_RPC --document ORIGINAL. This requires no application credentials or wallet, submits no transaction, and hashes the local file without uploading it. The verifier binds exported fields to the snapshot rather than trusting the bundle's status flags. Keep exported snapshots private because they contain authorized review evidence. Independent verification of the hosted private network requires an authorized read endpoint; no public RPC is exposed by the prototype.
+
 ## Validation
 
 Frontend: pnpm build. Backend: python -m pytest tests -q. Tests use isolated temporary databases and provider test doubles only within tests; they are not runtime fallbacks. Tests cover isolation, review authorization, append-only appeals, issuer counts, file validation, AI consent/free-model rules, cookie CSRF, logout/password revocation, invitation reuse, durable jobs, tamper detection, archival and server-side pagination/search. Authenticity regressions cover citation-only samples, borrowed DOI/title mismatches, unavailable providers, issuer evidence gates, changed issuer files, corrupt structure, harmless PDF destinations, and actual signed-byte validation with a self-signed ephemeral test certificate. Changed signed bytes fail; a self-signed signer is never reported as authenticated.
+
+Accreditation regressions additionally cover claim count/issuer acceptance gates, owner isolation, immutable claim submission, append-only claim review, changed issuer originals after support, sealed snapshots, legacy receipt scope, and post-sealing changes to claims, decisions, period, issuer counts and originals. A separate isolated Ganache integration verifies real receipts and exported proofs and rejects changed snapshots, changed originals and unrelated successful receipts. No test account, fabricated claim or fraud finding is inserted into production.
 
 A live local integration pass queried a publication DOI: Crossref and Europe PMC returned records, DataCite returned not-found, and review status remained unverified. OpenRouter returned real advisory text without changing status. Browser QA covers 375px phone, 768px tablet, 1440px desktop and short landscape navigation, cookie restoration, source views, motion controls and logout.
 
