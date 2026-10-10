@@ -28,6 +28,7 @@ def dispose_at_end():
     scratch.cleanup()
 
 def account(c,email='college@example.com',role='college'):
+    c.cookies.clear()
     response=c.post('/auth/register',json={'email':email,'password':'test-password-long','name':'Test User','college':'Test College'})
     assert response.status_code==201,response.text
     if role=='reviewer':
@@ -54,6 +55,7 @@ def test_owner_isolation_and_reviewer_permission(client):
     assert client.get('/documents',headers=b).json()==[]
     for endpoint in ['', '/file','/report']:
         assert client.get('/documents/'+d['id']+endpoint,headers=b).status_code==404
+    client.cookies.clear()
     assert client.get('/documents').status_code==401
     assert client.post(f"/documents/{d['id']}/decisions",headers=a,json={'outcome':'confirmed_fraud','reason':'This is a deliberate test finding with evidence.','evidence':'issuer response TEST-01'}).status_code==403
 
@@ -126,3 +128,76 @@ def test_independent_placement_count_mismatch(client):
     count_check=next(c for c in checked['checks'] if c['name']=='Placement count comparison')
     assert count_check['state']=='warn' and '100' in count_check['detail'] and '40' in count_check['detail']
     assert client.get('/ledger',headers=r).json()==[]
+
+def test_cookie_session_csrf_logout_and_password_revocation(client):
+    h=account(client)
+    assert client.get('/auth/me').status_code==200
+    assert client.post('/auth/logout').status_code==403
+    assert client.post('/auth/logout',headers={'X-Veris-Request':'workspace','Origin':'https://untrusted.example'}).status_code==403
+    assert client.post('/auth/logout',headers={'X-Veris-Request':'workspace'}).status_code==200
+    assert client.get('/auth/me',headers=h).status_code==401
+    login=client.post('/auth/login',json={'email':'college@example.com','password':'test-password-long'})
+    token={'Authorization':'Bearer '+login.json()['token']}
+    assert 'HttpOnly' in login.headers['set-cookie'] and 'SameSite=lax' in login.headers['set-cookie']
+    changed=client.post('/auth/password',headers=token,json={'current_password':'test-password-long','new_password':'new-passphrase-long-enough'})
+    assert changed.status_code==200
+    assert client.get('/auth/me',headers=token).status_code==401
+    assert client.post('/auth/login',json={'email':'college@example.com','password':'test-password-long'}).status_code==401
+    assert client.post('/auth/login',json={'email':'college@example.com','password':'new-passphrase-long-enough'}).status_code==200
+
+def test_invitation_is_single_use_and_invalid_invite_rolls_back(client):
+    from datetime import datetime,timedelta,timezone
+    code='test-only-reviewer-invitation'
+    with main.SessionLocal() as s:
+        s.add(main.ReviewerInvite(digest=hashlib.sha256(code.encode()).hexdigest(),expires=(datetime.now(timezone.utc)+timedelta(hours=1)).isoformat()));s.commit()
+    body={'email':'reviewer@example.com','password':'reviewer-passphrase-long','name':'Reviewer','college':'Review Institution','reviewer_invite':code}
+    assert client.post('/auth/register',json=body).json()['role']=='reviewer'
+    assert client.post('/auth/register',json={**body,'email':'second@example.com'}).status_code==403
+    with main.SessionLocal() as s:assert not s.scalar(select(main.Account).where(main.Account.email=='second@example.com'))
+
+def test_durable_job_and_archive_visibility(client,monkeypatch):
+    import verification
+    owner=account(client)
+    r=client.post('/documents?background=true',headers=owner,data={'category':'Research publications','period':'2026'},files={'file':('original.txt',b'Original public research evidence without a DOI.','text/plain')})
+    assert r.status_code==201 and r.json()['job']['state']=='queued'
+    d=r.json()
+    assert client.post('/documents/'+d['id']+'/verify',headers=owner).status_code==409
+    verification.process_next()
+    result=client.get('/documents/'+d['id'],headers=owner).json()
+    assert result['job']['state']=='complete' and result['job']['progress']==100
+    assert len(result['job']['timeline'])==5
+    assert result['status']=='unverified' and result['job']['result']['sources']==[]
+    before=client.get('/workspace',headers=owner).json()
+    assert before['total']==1
+    with main.SessionLocal() as s:s.add(main.Archive(id=d['id'],kind='document',reason='Isolated QA record'));s.commit()
+    assert client.get('/workspace',headers=owner).json()['total']==0
+    assert client.get('/documents/'+d['id'],headers=owner).status_code==404
+
+def test_stored_original_integrity_failure_is_retained(client):
+    import verification
+    h=account(client)
+    r=client.post('/documents?background=true',headers=h,data={'category':'Research publications','period':'2026'},files={'file':('original.txt',b'Original evidence.','text/plain')})
+    id=r.json()['id']
+    with main.SessionLocal() as s:
+        doc=s.get(main.Document,id);(main.STORAGE/doc.storage_name).write_bytes(b'changed bytes')
+    verification.process_next()
+    result=client.get('/documents/'+id,headers=h).json()
+    assert result['job']['state']=='failed' and 'fingerprint differs' in result['job']['error']
+    assert result['status']=='unverified'
+    assert client.get('/ledger',headers=h).json()==[]
+
+def test_workspace_search_pagination_and_ledger_isolation(client):
+    h=account(client)
+    with main.SessionLocal() as s:
+        u=s.scalar(select(main.Account).where(main.Account.email=='college@example.com'))
+        for i in range(101):s.add(main.Document(owner_id=u.id,filename=f'evidence-{i:03}.txt',college=u.college,category='Research publications',period='2026',sha256=hashlib.sha256(str(i).encode()).hexdigest(),storage_name=f'isolated-{i}.txt',text='Isolated test text'))
+        s.commit()
+    first=client.get('/workspace',headers=h).json()
+    second=client.get('/workspace?offset=100',headers=h).json()
+    assert first['total']==101 and first['matching']==101 and len(first['documents'])==100
+    assert len(second['documents'])==1 and first['documents'][0]['id']!=second['documents'][0]['id']
+    assert client.get('/workspace?search=evidence-050',headers=h).json()['matching']==1
+    assert client.get('/workspace?status=confirmed_fraud',headers=h).json()['matching']==0
+    other=account(client,'other@example.com')
+    assert client.get('/workspace',headers=other).json()['total']==0
+    assert client.get('/ledger',headers=other).json()==[]

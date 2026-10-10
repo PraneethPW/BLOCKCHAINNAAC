@@ -1,8 +1,12 @@
 export type Status='unverified'|'flagged'|'verified'|'confirmed_fraud';
 export type Check={name:string;state:'pass'|'warn'|'unknown';detail:string};
 export type Decision={id:string;outcome:string;reason:string;evidence:string;created_at:string;reviewer:string};
-export type Doc={id:string;filename:string;college:string;category:string;period:string;sha256:string;status:Status;created_at:string;checks:Check[];text:string;ai?:string;decisions:Decision[];anchor?:string};
+export type SourceResult={provider:string;identifier:string;url:string;checked_at:string;state:'found'|'not_found'|'unavailable';detail:string;title:string;authors:string[];publisher?:string;year?:number;notice?:string;title_in_document?:boolean};
+export type Job={id:string;document_id:string;state:'queued'|'running'|'complete'|'failed';stage:string;progress:number;created_at:string;updated_at:string;error:string;result:{metadata?:{bytes:number;format:string;pages:number|null;extraction:string;ocr_pages:number;signature_fields:number;dois:string[];pdf_metadata?:Record<string,string>};sources?:SourceResult[];checked_at?:string};timeline:{stage:string;at:string}[]};
+export type Doc={id:string;filename:string;college:string;category:string;period:string;sha256:string;status:Status;created_at:string;checks:Check[];text:string;ai?:string;decisions:Decision[];job?:Job|null};
 export type User={id:string;name:string;college:string;role:'college'|'reviewer';email:string};
 export type Anchor={id:string;case_id:string;document_hash:string;evidence_hash:string;outcome:string;timestamp:string;state:string;tx_hash?:string;network?:string};
+export type TrustedSource={id:string;sha256:string;college:string;category:string;period:string;issuer:string;reference:string;placements:number|null};
+export type Workspace={user:User;documents:Doc[];ledger:Anchor[];sources:TrustedSource[];counts:Partial<Record<Status,number>>;total:number;revision:string;updated_at:string;services:{network:string;contract:string;automatic:boolean};processing_enabled:boolean;limit:number;offset:number;matching:number};
 export const categories=['Teaching & faculty','Research publications','Student placements','Infrastructure','Student outcomes','Financial records'];
 export const labels:Record<Status,string>={unverified:'Unverified',flagged:'Flagged',verified:'Verified',confirmed_fraud:'Confirmed fraud'};

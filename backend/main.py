@@ -18,10 +18,10 @@ import httpx
 import jwt
 from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from pydantic import BaseModel, Field, EmailStr
-from sqlalchemy import create_engine, String, Text, Integer, select, UniqueConstraint
+from pydantic import BaseModel, Field, EmailStr, field_validator
+from sqlalchemy import create_engine, String, Text, Integer, select, UniqueConstraint, func, or_
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker, Session
 from pypdf import PdfReader
 
@@ -113,6 +113,35 @@ class NetworkConfig(Base):
     network: Mapped[str] = mapped_column(String(40), primary_key=True)
     address: Mapped[str] = mapped_column(String(42))
     start_block: Mapped[int] = mapped_column(Integer)
+class AuthSession(Base):
+    __tablename__ = 'veris_auth_sessions'
+    id: Mapped[str] = mapped_column(String(36),primary_key=True,default=uid)
+    user_id: Mapped[str] = mapped_column(String(36),index=True)
+    expires: Mapped[str] = mapped_column(String(40))
+    revoked: Mapped[int] = mapped_column(Integer,default=0)
+class ReviewerInvite(Base):
+    __tablename__ = 'veris_reviewer_invites'
+    digest: Mapped[str] = mapped_column(String(64),primary_key=True)
+    expires: Mapped[str] = mapped_column(String(40))
+    claimed_by: Mapped[str] = mapped_column(String(36),default='')
+class Archive(Base):
+    __tablename__ = 'veris_archived_records'
+    id: Mapped[str] = mapped_column(String(36),primary_key=True)
+    kind: Mapped[str] = mapped_column(String(20))
+    reason: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[str] = mapped_column(String(40),default=now)
+class VerificationJob(Base):
+    __tablename__ = 'veris_verification_jobs'
+    id: Mapped[str] = mapped_column(String(36),primary_key=True,default=uid)
+    document_id: Mapped[str] = mapped_column(String(36),index=True)
+    state: Mapped[str] = mapped_column(String(30),default='queued')
+    stage: Mapped[str] = mapped_column(String(100),default='Awaiting processor')
+    progress: Mapped[int] = mapped_column(Integer,default=0)
+    created_at: Mapped[str] = mapped_column(String(40),default=now)
+    updated_at: Mapped[str] = mapped_column(String(40),default=now)
+    result: Mapped[str] = mapped_column(Text,default='{}')
+    error: Mapped[str] = mapped_column(Text,default='')
+    timeline: Mapped[str] = mapped_column(Text,default='[]')
 def hash_password(password):
     salt=secrets.token_hex(16)
     key=hashlib.scrypt(password.encode(),salt=bytes.fromhex(salt),n=16384,r=8,p=1).hex()
@@ -123,12 +152,15 @@ def check_password(password, saved):
 def db():
     with SessionLocal() as s: yield s
 bearer=HTTPBearer(auto_error=False)
-def current(auth:HTTPAuthorizationCredentials=Depends(bearer), s:Session=Depends(db)):
-    if not auth: raise HTTPException(401,'Sign in to continue.')
+def current(request:Request,auth:HTTPAuthorizationCredentials=Depends(bearer), s:Session=Depends(db)):
+    credential=auth.credentials if auth else request.cookies.get('veris_session','')
+    if not credential: raise HTTPException(401,'Sign in to continue.')
     try:
-        payload=jwt.decode(auth.credentials,SECRET,algorithms=['HS256'],options={'require':['exp','sub']})
+        payload=jwt.decode(credential,SECRET,algorithms=['HS256'],options={'require':['exp','sub','jti']})
+        session=s.get(AuthSession,payload['jti'])
+        if not session or session.user_id!=payload['sub'] or session.revoked or session.expires<now():raise ValueError()
         user=s.get(Account,payload['sub'])
-        if not user: raise ValueError()
+        if not user or s.get(Archive,user.id): raise ValueError()
         return user
     except (jwt.PyJWTError,ValueError): raise HTTPException(401,'Session expired. Sign in again.')
 def reviewer(user:Account=Depends(current)):
@@ -138,24 +170,30 @@ def get_document(s,id,user,lock=False):
     query=select(Document).where(Document.id==id)
     if lock: query=query.with_for_update()
     doc=s.scalar(query)
-    if not doc or (user.role!='reviewer' and doc.owner_id!=user.id): raise HTTPException(404,'Document not found.')
+    if not doc or s.get(Archive,id) or (user.role!='reviewer' and doc.owner_id!=user.id): raise HTTPException(404,'Document not found.')
     return doc
 def account_json(u):return {k:getattr(u,k) for k in ['id','name','email','college','role']}
 def document_json(d,s):
     value={k:getattr(d,k) for k in ['id','filename','college','category','period','sha256','status','created_at','text','ai']}
     value['checks']=json.loads(d.checks)
     value['decisions']=[{k:getattr(r,k) for k in ['id','outcome','reason','evidence','created_at','reviewer']} for r in s.scalars(select(Decision).where(Decision.document_id==d.id).order_by(Decision.created_at))]
+    job=s.scalar(select(VerificationJob).where(VerificationJob.document_id==d.id).order_by(VerificationJob.created_at.desc()))
+    value['job']=job_json(job) if job else None
     return value
+def job_json(job):return {**{k:getattr(job,k) for k in ['id','document_id','state','stage','progress','created_at','updated_at','error']},'result':json.loads(job.result),'timeline':json.loads(job.timeline)}
+def visible_documents(u):
+    q=select(Document).where(~Document.id.in_(select(Archive.id).where(Archive.kind=='document')))
+    return q if u.role=='reviewer' else q.where(Document.owner_id==u.id)
 def run_checks(d,s):
     checks=[{'name':'SHA-256 fingerprint','state':'pass','detail':'Calculated from the exact uploaded bytes.'}]
-    duplicate=s.scalar(select(Document).where(Document.sha256==d.sha256,Document.id!=d.id))
+    duplicate=s.scalar(select(Document).where(Document.sha256==d.sha256,Document.id!=d.id,~Document.id.in_(select(Archive.id))))
     checks.append({'name':'Duplicate fingerprint','state':'warn' if duplicate else 'pass','detail':'A matching submission exists; context needs authorized review.' if duplicate else 'No identical fingerprint in the current registry.'})
-    source=s.scalar(select(SourceRecord).where(SourceRecord.sha256==d.sha256,SourceRecord.college==d.college,SourceRecord.category==d.category,SourceRecord.period==d.period))
+    source=s.scalar(select(SourceRecord).where(SourceRecord.sha256==d.sha256,SourceRecord.college==d.college,SourceRecord.category==d.category,SourceRecord.period==d.period,~SourceRecord.id.in_(select(Archive.id))))
     checks.append({'name':'Authorized source comparison','state':'pass' if source else 'unknown','detail':f'Exact match to reviewer-registered source from {source.issuer}. Reference: {source.reference}. Human review still required.' if source else 'No matching authorized issuer record is available. Missing source evidence is not fraud.'})
     if d.category=='Student placements':
         numbers=set(int(x) for x in re.findall(r'(\d+)\s+(?:students?\s+)?(?:placed|placements)\b',d.text,re.I))
         numbers.update(int(x) for x in re.findall(r'\b(?:placements|students placed)\s*[:=\-]\s*(\d+)',d.text,re.I))
-        metrics=list(s.scalars(select(SourceMetric).join(SourceRecord,SourceMetric.source_id==SourceRecord.id).where(SourceRecord.college==d.college,SourceRecord.category==d.category,SourceRecord.period==d.period,SourceMetric.name=='placements')))
+        metrics=list(s.scalars(select(SourceMetric).join(SourceRecord,SourceMetric.source_id==SourceRecord.id).where(SourceRecord.college==d.college,SourceRecord.category==d.category,SourceRecord.period==d.period,SourceMetric.name=='placements',~SourceRecord.id.in_(select(Archive.id)))))
         confirmed={m.value for m in metrics}
         state='unknown';detail='A single readable placement claim and an authorized count for the same reporting period are required.'
         if len(numbers)==1 and len(confirmed)==1:
@@ -213,19 +251,30 @@ async def lifespan(app):
             try: await asyncio.to_thread(process)
             except Exception: logging.getLogger('veris').warning('Blockchain pass unavailable; queued evidence retained for retry.')
             await asyncio.sleep(20)
-    task=asyncio.create_task(anchor_loop()) if os.getenv('AUTO_ANCHOR','false').lower()=='true' else None
+    async def verification_loop():
+        from verification import process_next
+        while True:
+            try: await asyncio.to_thread(process_next)
+            except Exception: logging.getLogger('veris').warning('Verification processor unavailable; pending jobs retained.')
+            await asyncio.sleep(2)
+    tasks=[]
+    if os.getenv('AUTO_ANCHOR','false').lower()=='true':tasks.append(asyncio.create_task(anchor_loop()))
+    if os.getenv('AUTO_VERIFY','false').lower()=='true':tasks.append(asyncio.create_task(verification_loop()))
     try: yield
     finally:
-        if task:
+        for task in tasks:
             task.cancel()
             try: await task
             except asyncio.CancelledError: pass
 app=FastAPI(title='Veris Evidence API',description='Independent prototype. No official NAAC affiliation.',lifespan=lifespan)
 origins=os.getenv('FRONTEND_ORIGINS','http://127.0.0.1:5173,http://localhost:5173').split(',')
-app.add_middleware(CORSMiddleware,allow_origins=[v.strip() for v in origins],allow_credentials=False,allow_methods=['GET','POST'],allow_headers=['Authorization','Content-Type'])
+app.add_middleware(CORSMiddleware,allow_origins=[v.strip() for v in origins],allow_credentials=True,allow_methods=['GET','POST'],allow_headers=['Authorization','Content-Type','X-Veris-Request'])
 _limits={};_limit_lock=threading.Lock()
 @app.middleware('http')
 async def guards(request:Request,call_next):
+    origin=request.headers.get('origin')
+    if request.method=='POST' and origin and origin not in [v.strip() for v in origins]:return Response('Untrusted request origin.',status_code=403)
+    if request.method=='POST' and request.cookies.get('veris_session') and not request.headers.get('authorization') and request.headers.get('X-Veris-Request')!='workspace':return Response('Request verification required.',status_code=403)
     size=request.headers.get('content-length')
     if size and (not size.isdigit() or int(size)>11*1024*1024):return Response('Upload exceeds request limit.',status_code=413)
     if request.url.path.startswith('/auth/'):
@@ -247,6 +296,12 @@ class Registration(BaseModel):
     password:str=Field(min_length=12,max_length=200)
     name:str=Field(min_length=2,max_length=100)
     college:str=Field(min_length=3,max_length=200)
+    reviewer_invite:str=Field(default='',max_length=200)
+    @field_validator('name','college')
+    @classmethod
+    def nonblank(cls,value):
+        if len(value.strip())<2:raise ValueError('Enter a meaningful name.')
+        return value.strip()
 class Login(BaseModel):
     email:EmailStr
     password:str=Field(min_length=1,max_length=200)
@@ -255,6 +310,9 @@ class Review(BaseModel):
     reason:str=Field(min_length=20,max_length=5000)
     evidence:str=Field(default='',max_length=5000)
 class Consent(BaseModel): consent:bool
+class PasswordChange(BaseModel):
+    current_password:str=Field(min_length=1,max_length=200)
+    new_password:str=Field(min_length=12,max_length=200)
 @app.get('/health')
 def health():
     with SessionLocal() as s:
@@ -265,32 +323,58 @@ def register(body:Registration,s:Session=Depends(db)):
     email=str(body.email).lower()
     if s.scalar(select(Account).where(Account.email==email)):raise HTTPException(409,'Account already exists.')
     u=Account(email=email,password=hash_password(body.password),name=body.name.strip(),college=body.college.strip(),role='college')
-    s.add(u);s.commit()
+    s.add(u);s.flush()
+    if body.reviewer_invite:
+        invite=s.scalar(select(ReviewerInvite).where(ReviewerInvite.digest==hashlib.sha256(body.reviewer_invite.encode()).hexdigest()).with_for_update())
+        if not invite or invite.claimed_by or invite.expires<now():raise HTTPException(403,'Reviewer invitation is invalid, expired, or already used.')
+        u.role='reviewer';invite.claimed_by=u.id
+    s.commit()
     return account_json(u)
 @app.post('/auth/login')
-def sign_in(body:Login,s:Session=Depends(db)):
+def sign_in(body:Login,response:Response,s:Session=Depends(db)):
     u=s.scalar(select(Account).where(Account.email==str(body.email).lower()))
-    if not u or not check_password(body.password,u.password):raise HTTPException(401,'Email or password is incorrect.')
-    token=jwt.encode({'sub':u.id,'iat':datetime.now(timezone.utc),'exp':datetime.now(timezone.utc)+timedelta(hours=2)},SECRET,algorithm='HS256')
+    valid=check_password(body.password,u.password if u else hash_password('constant-time-placeholder'))
+    if not u or not valid or s.get(Archive,u.id):raise HTTPException(401,'Email or password is incorrect.')
+    expires=datetime.now(timezone.utc)+timedelta(hours=8)
+    session=AuthSession(id=uid(),user_id=u.id,expires=expires.isoformat());s.add(session);s.commit()
+    token=jwt.encode({'sub':u.id,'jti':session.id,'iat':datetime.now(timezone.utc),'exp':expires},SECRET,algorithm='HS256')
+    response.set_cookie('veris_session',token,httponly=True,secure=PRODUCTION,samesite='lax',max_age=8*3600,path='/')
     return {'token':token,'user':account_json(u)}
 @app.get('/auth/me')
 def me(u:Account=Depends(current)):return account_json(u)
+@app.post('/auth/logout')
+def logout(request:Request,response:Response,u:Account=Depends(current),s:Session=Depends(db)):
+    raw=request.headers.get('authorization','').removeprefix('Bearer ') or request.cookies.get('veris_session','')
+    try:
+        payload=jwt.decode(raw,SECRET,algorithms=['HS256']);session=s.get(AuthSession,payload['jti'])
+        if session:session.revoked=1;s.commit()
+    except (jwt.PyJWTError,KeyError):pass
+    response.delete_cookie('veris_session',path='/');return {'signed_out':True}
+@app.post('/auth/password')
+def change_password(body:PasswordChange,response:Response,u:Account=Depends(current),s:Session=Depends(db)):
+    if not check_password(body.current_password,u.password):raise HTTPException(400,'Your current password is incorrect.')
+    u.password=hash_password(body.new_password)
+    for session in s.scalars(select(AuthSession).where(AuthSession.user_id==u.id)):session.revoked=1
+    s.commit();response.delete_cookie('veris_session',path='/');return {'changed':True,'sign_in_required':True}
 @app.get('/documents')
 def list_documents(u:Account=Depends(current),s:Session=Depends(db)):
-    q=select(Document).order_by(Document.created_at.desc())
-    if u.role!='reviewer':q=q.where(Document.owner_id==u.id)
+    q=visible_documents(u).order_by(Document.created_at.desc())
     return [document_json(d,s) for d in s.scalars(q)]
 @app.post('/documents',status_code=201)
-async def upload(file:UploadFile=File(...),category:str=Form(...),period:str=Form(...),u:Account=Depends(current),s:Session=Depends(db)):
+async def upload(file:UploadFile=File(...),category:str=Form(...),period:str=Form(...),background:bool=False,u:Account=Depends(current),s:Session=Depends(db)):
     if category not in CATEGORIES or not 1<=len(period.strip())<=80:raise HTTPException(400,'Invalid category or reporting period.')
     data,name,ext=await read_upload(file)
     # Extraction runs in a worker thread; OCR is optional and explicitly reported.
     from starlette.concurrency import run_in_threadpool
-    text=await run_in_threadpool(extract,data,ext)
+    text='' if background else await run_in_threadpool(extract,data,ext)
     storage_name=store_file(data,ext)
     try:
         d=Document(id=uid(),owner_id=u.id,filename=name,college=u.college,category=category,period=period.strip(),sha256=hashlib.sha256(data).hexdigest(),storage_name=storage_name,text=text,status='unverified')
-        s.add(d);s.flush();run_checks(d,s);s.commit()
+        s.add(d);s.flush()
+        if background:
+            d.checks=canonical([{'name':'SHA-256 fingerprint','state':'pass','detail':'Calculated from the exact uploaded bytes.'}]);s.add(VerificationJob(document_id=d.id))
+        else:run_checks(d,s)
+        s.commit()
         return document_json(d,s)
     except Exception:
         s.rollback();(STORAGE/storage_name).unlink(missing_ok=True);raise
@@ -306,6 +390,12 @@ def original(id:str,u:Account=Depends(current),s:Session=Depends(db)):
 @app.post('/documents/{id}/recheck')
 def recheck(id:str,u:Account=Depends(current),s:Session=Depends(db)):
     d=get_document(s,id,u,True);run_checks(d,s);s.commit();return document_json(d,s)
+@app.post('/documents/{id}/verify',status_code=202)
+def enqueue_verification(id:str,u:Account=Depends(current),s:Session=Depends(db)):
+    d=get_document(s,id,u,True)
+    active=s.scalar(select(VerificationJob).where(VerificationJob.document_id==id,VerificationJob.state.in_(['queued','running'])))
+    if active:raise HTTPException(409,'Verification is already in progress.')
+    job=VerificationJob(document_id=id);s.add(job);s.commit();return job_json(job)
 @app.post('/trusted-records',status_code=201)
 async def source_record(file:UploadFile=File(...),college:str=Form(...),category:str=Form(...),period:str=Form(...),issuer:str=Form(...),reference:str=Form(...),placements:str=Form(''),u:Account=Depends(reviewer),s:Session=Depends(db)):
     if category not in CATEGORIES or not 3<=len(college.strip())<=200 or not 1<=len(period.strip())<=80 or not 2<=len(issuer.strip())<=200 or not 10<=len(reference.strip())<=5000:raise HTTPException(400,'Provide valid source context and an evidence reference.')
@@ -361,8 +451,7 @@ async def assist(id:str,body:Consent,u:Account=Depends(current),s:Session=Depend
     except (httpx.HTTPError,KeyError,TypeError,IndexError,ValueError):raise HTTPException(503,'AI assistance is temporarily unavailable. Your verification status is unchanged.')
 @app.get('/ledger')
 def ledger(u:Account=Depends(current),s:Session=Depends(db)):
-    q=select(Anchor).order_by(Anchor.timestamp.desc())
-    if u.role!='reviewer':q=q.where(Anchor.case_id.in_(select(Document.id).where(Document.owner_id==u.id)))
+    q=select(Anchor).where(Anchor.case_id.in_(visible_documents(u).with_only_columns(Document.id))).order_by(Anchor.timestamp.desc())
     return [{**{k:getattr(a,k) for k in ['id','case_id','document_hash','evidence_hash','outcome','timestamp','state','tx_hash']},'network':os.getenv('LEDGER_NETWORK','sepolia')} for a in s.scalars(q)]
 @app.get('/documents/{id}/report')
 def evidence_report(id:str,u:Account=Depends(current),s:Session=Depends(db)):
@@ -379,9 +468,73 @@ def evidence_report(id:str,u:Account=Depends(current),s:Session=Depends(db)):
     for k in ['id','filename','college','category','period','status','created_at','sha256']:paragraph(k.upper()+': '+str(data[k]))
     paragraph('Verification checks','Heading2')
     for c in data['checks']:paragraph(f"{c['name']} [{c['state']}]: {c['detail']}")
+    if data.get('job'):
+        job=data['job'];paragraph('Processing and source provenance','Heading2')
+        paragraph(f"Job: {job['id']} / {job['state']} / {job['stage']} / {job['progress']}%\nUpdated: {job['updated_at']}")
+        if job.get('error'):paragraph('Processing error: '+job['error'])
+        for r in job.get('result',{}).get('sources',[]):
+            paragraph(f"{r['provider']} / {r['state']} / DOI: {r['identifier']}\nChecked: {r['checked_at']}\nSource: {r['url']}\nTitle: {r.get('title','')}\nAuthors: {', '.join(r.get('authors',[]))}\nResult: {r['detail']}\nNotice: {r.get('notice','none')}")
+        for t in job.get('timeline',[]):paragraph(t['at']+' / '+t['stage'])
+        paragraph('Public metadata corroboration does not establish institutional authorship. Cryptographic signer trust and private issuer records require authorized access.')
     paragraph('Authorized decisions','Heading2')
     for r in data['decisions']:paragraph(f"{r['created_at']} — {r['reviewer']} — {r['outcome']}\nReason: {r['reason']}\nEvidence: {r['evidence']}")
     for a in s.scalars(select(Anchor).where(Anchor.case_id==id)):paragraph(f'Ledger: {a.state}\nEvidence hash: {a.evidence_hash}\nTransaction: {a.tx_hash or "not yet anchored"}')
     if d.ai:paragraph('AI advisory note (not a verification decision)','Heading2');paragraph(d.ai)
     SimpleDocTemplate(buf,title='Veris Evidence Report',author='Veris',topMargin=45,bottomMargin=45).build(story)
     return Response(buf.getvalue(),media_type='application/pdf',headers={'Content-Disposition':f'attachment; filename="{id}-report.pdf"'})
+
+def workspace_revision(u,s):
+    ids=visible_documents(u).with_only_columns(Document.id)
+    docs=list(s.execute(select(Document.id,Document.status,Document.checks,Document.ai).where(Document.id.in_(ids))))
+    anchors=list(s.execute(select(Anchor.id,Anchor.state,Anchor.tx_hash).where(Anchor.case_id.in_(ids))))
+    jobs=list(s.execute(select(VerificationJob.id,VerificationJob.state,VerificationJob.progress,VerificationJob.updated_at).where(VerificationJob.document_id.in_(ids))))
+    decisions=list(s.execute(select(Decision.id).where(Decision.document_id.in_(ids))))
+    sources=list(s.execute(select(SourceRecord.id).where(~SourceRecord.id.in_(select(Archive.id))))) if u.role=='reviewer' else []
+    return hashlib.sha256(canonical([sorted([list(r) for r in items]) for items in [docs,anchors,jobs,decisions,sources]]).encode()).hexdigest()
+
+@app.get('/workspace')
+def workspace(offset:int=0,search:str='',status:str='',review_only:bool=False,u:Account=Depends(current),s:Session=Depends(db)):
+    offset=max(0,offset);q=visible_documents(u)
+    if search.strip():
+        pattern='%'+search.strip()[:200].replace('%','\\%').replace('_','\\_')+'%'
+        q=q.where(or_(Document.filename.ilike(pattern,escape='\\'),Document.college.ilike(pattern,escape='\\'),Document.id.ilike(pattern,escape='\\'),Document.category.ilike(pattern,escape='\\')))
+    if status in ['unverified','flagged','verified','confirmed_fraud']:q=q.where(Document.status==status)
+    if review_only:q=q.where(Document.status.in_(['flagged','confirmed_fraud']))
+    matching=s.scalar(select(func.count()).select_from(q.subquery()))
+    documents=list(s.scalars(q.order_by(Document.created_at.desc(),Document.id).offset(offset).limit(100)))
+    ids=visible_documents(u).with_only_columns(Document.id)
+    counts=dict(s.execute(select(Document.status,func.count()).where(Document.id.in_(ids)).group_by(Document.status)).all())
+    anchors=ledger(u,s)
+    sources=[]
+    if u.role=='reviewer':
+        for r in s.scalars(select(SourceRecord).where(~SourceRecord.id.in_(select(Archive.id)))):
+            metric=s.scalar(select(SourceMetric).where(SourceMetric.source_id==r.id))
+            sources.append({**{k:getattr(r,k) for k in ['id','sha256','college','category','period','issuer','reference']},'placements':metric.value if metric else None})
+    return {'user':account_json(u),'documents':[document_json(d,s) for d in documents],'ledger':anchors,'sources':sources,'counts':counts,'total':sum(counts.values()),'matching':matching,'offset':offset,'revision':workspace_revision(u,s),'updated_at':now(),'services':health()['blockchain'],'processing_enabled':os.getenv('AUTO_VERIFY','false').lower()=='true','limit':100}
+
+@app.get('/events')
+async def events(request:Request,u:Account=Depends(current)):
+    async def stream():
+        last='';started=time.monotonic()
+        # Bounded streams reconnect automatically, releasing DB connections between pulses.
+        while time.monotonic()-started<45 and not await request.is_disconnected():
+            with SessionLocal() as s:
+                raw=request.headers.get('authorization','').removeprefix('Bearer ')
+                auth=HTTPAuthorizationCredentials(scheme='Bearer',credentials=raw) if raw else None
+                try:live_user=current(request,auth,s)
+                except HTTPException:
+                    yield 'event: session-expired\ndata: {}\n\n';return
+                revision=workspace_revision(live_user,s)
+            if revision!=last:
+                yield 'event: workspace\ndata: '+canonical({'revision':revision,'at':now()})+'\n\n';last=revision
+            else:yield 'event: heartbeat\ndata: '+canonical({'at':now()})+'\n\n'
+            await asyncio.sleep(3)
+    return StreamingResponse(stream(),media_type='text/event-stream',headers={'Cache-Control':'no-store','X-Accel-Buffering':'no'})
+
+@app.get('/trusted-records/{id}/file')
+def source_file(id:str,u:Account=Depends(reviewer),s:Session=Depends(db)):
+    r=s.get(SourceRecord,id)
+    if not r or s.get(Archive,id):raise HTTPException(404,'Source record not found.')
+    path=STORAGE/r.storage_name
+    if not path.is_file():raise HTTPException(404,'Source file unavailable.')
+    return Response(path.read_bytes(),media_type='application/octet-stream',headers={'Content-Disposition':'attachment; filename="authorized-source'+path.suffix+'"'})

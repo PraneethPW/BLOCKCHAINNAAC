@@ -1,72 +1,59 @@
-# Veris — Accreditation evidence review
+# Veris — Connected accreditation evidence
 
-Independent working prototype. Not an official NAAC service. Does not issue accreditation grades.
+Independent working prototype. No NAAC affiliation; no accreditation grades.
 
-## Included
+## Experience
 
-- React, TypeScript, Tailwind CSS, Framer Motion and a procedural Three.js evidence vault. Scroll and pointer movement control the scene; reduced-motion preferences are supported.
-- Institution and reviewer workspaces: uploads, search, status filters, extracted text, source comparisons, review history, appeals, original-file downloads, PDF reports, source registration and audit trail.
-- FastAPI, SQLAlchemy and Neon PostgreSQL. Salted scrypt passwords, expiring in-memory bearer tokens, ownership-scoped document access and separately provisioned reviewer roles.
-- SHA-256 duplicate checks, exact issuer-file matches, and placement-count comparison with reviewer-registered source evidence for the same institution/category/period. A discrepancy starts an investigation, never a fraud finding.
-- PDF text extraction and Tesseract OCR for image uploads. Scanned PDFs without a text layer currently require conversion to images for OCR. Digital-signature certificate trust and revocation validation are explicitly reported as unavailable.
-- OpenRouter openrouter/free: explicit per-document consent, limited extracted text, provider data collection denied, and no paid-model fallback. AI is advisory and cannot change verification status.
-- Solidity append-only ledger plus a private Ethereum development network and Sepolia anchoring adapter. Only confirmed findings and later appeals are anchored. Opaque IDs and hashes go on-chain; files and review narratives stay off-chain.
+React + TypeScript + Tailwind, Framer Motion, Three.js and GSAP ScrollTrigger. A continuous procedural evidence core responds to scroll and pointer movement across the landing page, authentication and workspace. Reduced motion, keyboard navigation, modal focus containment, responsive layouts and a WebGL fallback are included. There are no runtime sample users, seeded dashboards or fabricated verification responses.
+
+## Authentication and access
+
+Institution registration, login, logout and password changes use scrypt password hashes and eight-hour HttpOnly sessions. Production cookies are Secure and SameSite=Lax. JWT session IDs are stored in PostgreSQL and checked on requests; logout revokes the current session and password changes revoke all sessions. State-changing cookie requests require an application header and allowed Origin. Ownership checks protect files, reports, decisions and ledger visibility. Reviewer access requires a hashed, expiring, single-use invitation or authorized backend provisioning.
+
+Use your own account. Issue a private reviewer invitation from an authorized backend shell with python provision_invitation.py --days 7. Do not publish invitation codes. No reviewer role selector is available to public users. Institution identity is self-entered until an authorized onboarding process is connected; email ownership verification and recovery email are not configured.
+
+## Verification
+
+Uploaded originals receive an exact SHA-256 fingerprint and a durable database job. A background worker records committed stages, timestamps, errors and provider results. PostgreSQL advisory locking serializes worker passes and interrupted jobs are retried after five minutes. Stored bytes are rehashed before processing; an integrity mismatch stops verification while retaining evidence.
+
+The worker extracts bounded native PDF text, runs Tesseract OCR on images and up to twelve scanned PDF pages, inspects PDF metadata, signature fields and active actions, detects duplicate fingerprints and repeated normalized text in the same institutional context. Reviewer-registered issuer records support exact-file comparisons and placement counts for matching institution/category/period. Originals are authenticated downloads, never executed inside the app.
+
+Extracted DOI identifiers (up to eight per pass) are checked directly against Crossref, DataCite and Europe PMC. Each provider result records the requested identifier, endpoint, time, returned metadata and found/not-found/unavailable state. Only fixed registry hosts are contacted; uploaded URLs are never fetched. A registry match corroborates metadata, not affiliation or document authenticity. Missing records and provider outages never establish fraud. Documents without public identifiers require authorized issuer evidence.
+
+SSE events announce actual workspace changes, with authenticated reconnects and a periodic refresh fallback. Search and status filters query PostgreSQL and the library paginates all matching records. Evidence views expose findings, public responses, extraction metadata, processing history, decisions and receipt status. PDF reports include check results, source provenance, decisions, transaction hashes and optional advisory notes.
+
+OpenRouter assistance requires explicit document consent, sends at most 12,000 extracted characters, denies provider data collection and uses only a :free model or openrouter/free. AI returns investigation advice and never changes review status. Capacity or privacy-policy failures appear as errors; no paid or fabricated fallback is used.
+
+Only supported authorized decisions establish verified or confirmed-fraud status. Confirmed findings and upheld appeals create append-only blockchain records containing opaque IDs and hashes. Sensitive files and narratives remain off-chain. Appeals preserve the earlier finding. Anchored status requires an actual successful transaction receipt.
 
 ## Local development
 
-Use Node 22+ and Python 3.12. In frontend, run `corepack enable`, `pnpm install`, then `pnpm dev`.
+Use Node 22+ and Python 3.12. In frontend: pnpm install, then pnpm dev. In backend: create a virtual environment, pip install -r requirements.txt, configure .env.example values in the process environment, then uvicorn main:app --host 127.0.0.1 --port 8000. Use --env-file .env if needed. Install Tesseract locally for OCR; the Docker image includes it. AUTO_VERIFY=true enables the processing loop. Development can use SQLite; production requires PostgreSQL and a strong JWT_SECRET.
 
-In backend, create/activate a virtual environment, run `pip install -r requirements.txt`, configure environment variables from .env.example, then run `uvicorn main:app --host 127.0.0.1 --port 8000`.
+The frontend calls same-origin /api. Vite proxies it to localhost:8000; frontend/vercel.json proxies it to the Railway API. This keeps sessions on the frontend origin. No database, AI or wallet credential belongs in frontend variables.
 
-The API reads the process environment. To use a private .env file locally, start uvicorn with `--env-file .env`. Development falls back to SQLite; production requires PostgreSQL and a strong JWT_SECRET. Install Tesseract locally for image OCR; the Docker image includes it. The frontend defaults to the deployed Railway API. For a local backend, set VITE_API_URL=http://127.0.0.1:8000 in frontend/.env.local.
+## Hosting
 
-Choose Explore platform for a clearly labeled fictional demo. Real institution accounts can be created through Sign in → Create account. The browser demo saves only file metadata and fingerprints; original demo files are not retained or transmitted. Reset it in workspace settings.
+Vercel: import PraneethPW/BLOCKCHAINNAAC, root frontend, framework Vite, build pnpm build, output dist. Update the proxy destination if the backend domain changes. Add the exact frontend HTTPS origin to Railway FRONTEND_ORIGINS.
 
-## Reviewer access
+Railway API: root /backend, Dockerfile, healthcheck /health, PORT supplied by Railway. Mount /data and set UPLOAD_DIR=/data/uploads. Set DATABASE_URL, JWT_SECRET (32+ random characters), APP_ENV=production, FRONTEND_ORIGINS, AUTO_VERIFY=true, OPENROUTER_API_KEY and OPENROUTER_MODEL. The hosted free model is dots-studio/dots-3-note-preview:free; availability can change.
 
-Run `python provision_reviewer.py` in a secure backend shell with DATABASE_URL set. The script prompts for reviewer details and a password without echoing it. It creates a new reviewer and refuses to change an existing account. Reviewer roles cannot be selected at public registration.
+Tables use the veris_ prefix. Startup creates missing tables without changing unrelated data. Archive rows hide prior QA records and deny archived account access without deleting evidence or blockchain history. Future schema changes require migrations.
 
-## Verification walkthrough
+## Blockchain
 
-1. Upload a report containing `100 students placed`, category Student placements, period `2025-26`.
-2. Reviewer registers authorized issuer evidence in workspace settings with the same exact institution/category/period and confirmed placement count `40`.
-3. Run checks again on the submission. The discrepancy is flagged; no blockchain entry is created.
-4. Reviewer investigates and records a decision with a supporting evidence reference. Only a confirmed fraud finding creates an anchoring outbox entry.
-5. The configured blockchain worker anchors it. An upheld appeal appends a linked record and preserves the earlier finding.
+The current hosted network is private Ganache, chain ID 1337, accessible only over Railway private networking. Its persistent /data volume retains history. LEDGER_NETWORK=private-devnet, LEDGER_RPC_URL, LEDGER_PRIVATE_KEY and AUTO_ANCHOR=true configure anchoring. The deployed contract address is retained in Neon; missing contract code stops writes rather than resetting history. Signed transactions are persisted before broadcast and advisory locking prevents concurrent worker passes.
 
-Issuer evidence is registered manually by authorized reviewers. No live NAAC, government or employer API connection is claimed. Matching files or counts do not independently verify every claim. Ambiguous counts remain investigative leads.
+This network produces real Ethereum receipts but is centrally operated development infrastructure. Independent validator governance, key custody, finality policy and backups are needed for a consortium deployment. Sepolia remains supported via LEDGER_NETWORK=sepolia, SEPOLIA_RPC_URL, LEDGER_CONTRACT_ADDRESS and a funded test wallet. Never switch an existing ledger database between networks without a migration.
 
-## Vercel
-
-Import PraneethPW/BLOCKCHAINNAAC. Set Root Directory to frontend, framework Vite, build command `pnpm build`, output directory dist. Set VITE_API_URL to the Railway HTTPS API origin. Add the exact resulting Vercel origin to Railway FRONTEND_ORIGINS. Database URLs, OpenRouter keys and wallet keys must never be VITE variables.
-
-## Railway
-
-The backend service builds from /backend using Dockerfile and healthcheck /health. It listens on Railway PORT. Mount a persistent volume at /data and set UPLOAD_DIR=/data/uploads.
-
-Required variables: DATABASE_URL, JWT_SECRET (random 32+ characters), APP_ENV=production, FRONTEND_ORIGINS (comma-separated exact origins), UPLOAD_DIR. AI variables: OPENROUTER_API_KEY and OPENROUTER_MODEL=openrouter/free. All credentials belong in Railway environment settings.
-
-Tables use the veris_ prefix. Startup creates missing tables without changing unrelated data. Future schema changes require migrations. requirements.lock.txt records tested Windows package versions; the Linux Docker build uses requirements.txt because the Windows lock includes pywin32.
-
-## Blockchain networks
-
-In contracts, run `pnpm install`, `pnpm compile`, then `node test.mjs`. VerisLedger.json contains the compiled ABI and bytecode; backend/ledger_abi.json is used by the worker.
-
-In a secure backend environment, configure SEPOLIA_RPC_URL and LEDGER_PRIVATE_KEY for a wallet with Sepolia test ETH. Run `python deploy_contract.py` with the compiled artifact available, or specify LEDGER_ARTIFACT. Set the returned LEDGER_CONTRACT_ADDRESS and LEDGER_START_BLOCK. Only chain ID 11155111 is accepted.
-
-Run `python anchor_worker.py` as a single scheduled/dedicated worker. Postgres advisory locking prevents concurrent passes. The signed public transaction is persisted before broadcast so interrupted sends can retry. A successful receipt is required for anchored status. Duplicate record IDs cannot overwrite records; appeals must reference the prior confirmed finding. The contract restricts writers and has no update/delete path.
-
-The hosted prototype uses a private Ganache network (chain ID 1337) on Railway, without a public RPC. Its /data volume retains chain history. Set LEDGER_NETWORK=private-devnet, LEDGER_RPC_URL to the private RPC, a random LEDGER_PRIVATE_KEY, and AUTO_ANCHOR=true. The worker creates test currency and deploys the compiled contract once, storing its public address in Neon. Missing persisted contract code stops writes instead of silently resetting history. This centrally operated development network demonstrates real Ethereum receipts; it does not provide independent consortium trust. Sepolia remains available with LEDGER_NETWORK=sepolia. Never switch an existing ledger database between networks without an explicit migration. Production needs finality monitoring, key custody, independent validators, backup and retention policies.
+Contract commands in contracts: pnpm install, pnpm compile, node test.mjs. Backend anchoring: python anchor_worker.py. The contract restricts writers, prevents duplicate IDs and validates appeal linkage. It has no record update or delete path.
 
 ## Validation
 
-- Frontend: `pnpm build` in frontend.
-- API: `python -m pytest tests -q` in backend.
-- Contract: `pnpm compile` and `node test.mjs` in contracts.
-- Private worker: in contracts run `pnpm exec ganache --server.port 8545 --chain.chainId 1337 --wallet.totalAccounts 0 --logging.quiet`; in backend run `python tests/devnet_integration.py`. It uses a temporary SQLite database, synthetic evidence and an ephemeral writer. Checks deployment, confirmed and appeal receipts, idempotent crash recovery and wrong-chain rejection.
+Frontend: pnpm build. Backend: python -m pytest tests/test_workflow.py -q. Tests use isolated temporary databases and provider test doubles only within tests; they are not runtime fallbacks. Tests cover isolation, review authorization, append-only appeals, issuer counts, file validation, AI consent/free-model rules, cookie CSRF, logout/password revocation, invitation reuse, durable jobs, tamper detection, archival and server-side pagination/search.
 
-API tests cover ownership isolation, reviewer permissions, evidence requirements, automated-check boundaries, placement-count mismatches, append-only appeals, report PDFs, invalid files, AI consent and paid-model rejection. Contract checks cover writer permissions, duplicate prevention, valid outcomes, appeal linkage and preserved history. A Neon integration smoke test uses synthetic data in a transaction that is rolled back.
+A live local integration pass queried a publication DOI: Crossref and Europe PMC returned records, DataCite returned not-found, and review status remained unverified. OpenRouter returned real advisory text without changing status. Browser QA covers 375px phone, 768px tablet, 1440px desktop and short landscape navigation, cookie restoration, source views, motion controls and logout.
 
-## Remaining production work
+## Boundaries and operational work
 
-Institution identity is self-entered and needs authorized onboarding. Login throttling is per-process. Files use a private persistent volume; operational backup, encryption controls, malware scanning and retention require deployment policy. Real issuer APIs, cryptographic signer-chain validation, robust content similarity, consortium governance and immutable off-chain evidence storage remain future integrations. The hosted free model is dots-studio/dots-3-note-preview:free, with optional reasoning disabled for a concise advisory answer. Configure OPENROUTER_MODEL to another :free model or openrouter/free as availability changes. AI may be unavailable under rate limits or privacy constraints. This prototype is not certified production infrastructure.
+Public scholarly APIs cannot authenticate placement letters, financial statements, certificates or institutional ownership without issuer access. Signature fields are detected, but cryptographic signer-chain/revocation validation is not configured. Extraction and OCR have explicit resource bounds. Login throttling is per process. Session rows and jobs are durable; deployment-scale rate limiting, malware scanning, email verification/recovery, encryption and retention policies, backups, immutable off-chain storage and independent validator governance remain operational work. This is a working independent prototype, not certified production accreditation infrastructure.

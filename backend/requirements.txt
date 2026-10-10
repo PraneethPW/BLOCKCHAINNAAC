@@ -6,6 +6,7 @@ python-multipart>=0.0.20,<1
 PyJWT>=2.10,<3
 httpx>=0.28,<1
 pypdf>=5,<7
+PyMuPDF>=1.26,<2
 Pillow>=11,<13
 pytesseract>=0.3.13,<1
 reportlab>=4,<5
