@@ -18,7 +18,7 @@ Use Node 22+ and Python 3.12. In frontend, run `corepack enable`, `pnpm install`
 
 In backend, create/activate a virtual environment, run `pip install -r requirements.txt`, configure environment variables from .env.example, then run `uvicorn main:app --host 127.0.0.1 --port 8000`.
 
-The API reads the process environment. To use a private .env file locally, start uvicorn with `--env-file .env`. Development falls back to SQLite; production requires PostgreSQL and a strong JWT_SECRET. Install Tesseract locally for image OCR; the Docker image includes it. The frontend defaults to API origin http://127.0.0.1:8000.
+The API reads the process environment. To use a private .env file locally, start uvicorn with `--env-file .env`. Development falls back to SQLite; production requires PostgreSQL and a strong JWT_SECRET. Install Tesseract locally for image OCR; the Docker image includes it. The frontend defaults to the deployed Railway API. For a local backend, set VITE_API_URL=http://127.0.0.1:8000 in frontend/.env.local.
 
 Choose Explore platform for a clearly labeled fictional demo. Real institution accounts can be created through Sign in → Create account. The browser demo saves only file metadata and fingerprints; original demo files are not retained or transmitted. Reset it in workspace settings.
 

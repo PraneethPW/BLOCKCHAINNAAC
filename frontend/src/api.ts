@@ -1,5 +1,5 @@
 import type {Doc,User,Anchor} from './types';
-export const API=(import.meta as ImportMeta & {env:Record<string,string>}).env.VITE_API_URL||'http://127.0.0.1:8000';
+export const API=(import.meta as ImportMeta & {env:Record<string,string>}).env.VITE_API_URL||'https://veris-api-production-a7ce.up.railway.app';
 let token='';
 export function setToken(value:string){token=value;}
 export async function api<T>(path:string,init:RequestInit={}):Promise<T>{
