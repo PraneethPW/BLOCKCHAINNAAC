@@ -157,10 +157,8 @@ def current(request:Request,auth:HTTPAuthorizationCredentials=Depends(bearer), s
     if not credential: raise HTTPException(401,'Sign in to continue.')
     try:
         payload=jwt.decode(credential,SECRET,algorithms=['HS256'],options={'require':['exp','sub','jti']})
-        session=s.get(AuthSession,payload['jti'])
-        if not session or session.user_id!=payload['sub'] or session.revoked or session.expires<now():raise ValueError()
-        user=s.get(Account,payload['sub'])
-        if not user or s.get(Archive,user.id): raise ValueError()
+        user=s.scalar(select(Account).join(AuthSession,AuthSession.user_id==Account.id).where(AuthSession.id==payload['jti'],Account.id==payload['sub'],AuthSession.revoked==0,AuthSession.expires>=now(),~Account.id.in_(select(Archive.id))))
+        if not user:raise ValueError()
         return user
     except (jwt.PyJWTError,ValueError): raise HTTPException(401,'Session expired. Sign in again.')
 def reviewer(user:Account=Depends(current)):
@@ -173,13 +171,24 @@ def get_document(s,id,user,lock=False):
     if not doc or s.get(Archive,id) or (user.role!='reviewer' and doc.owner_id!=user.id): raise HTTPException(404,'Document not found.')
     return doc
 def account_json(u):return {k:getattr(u,k) for k in ['id','name','email','college','role']}
-def document_json(d,s):
+def document_json(d,s,decisions=None,job=None,loaded=False):
     value={k:getattr(d,k) for k in ['id','filename','college','category','period','sha256','status','created_at','text','ai']}
     value['checks']=json.loads(d.checks)
-    value['decisions']=[{k:getattr(r,k) for k in ['id','outcome','reason','evidence','created_at','reviewer']} for r in s.scalars(select(Decision).where(Decision.document_id==d.id).order_by(Decision.created_at))]
-    job=s.scalar(select(VerificationJob).where(VerificationJob.document_id==d.id).order_by(VerificationJob.created_at.desc()))
+    if not loaded:
+        decisions=list(s.scalars(select(Decision).where(Decision.document_id==d.id).order_by(Decision.created_at)))
+        job=s.scalar(select(VerificationJob).where(VerificationJob.document_id==d.id).order_by(VerificationJob.created_at.desc()))
+    value['decisions']=[{k:getattr(r,k) for k in ['id','outcome','reason','evidence','created_at','reviewer']} for r in decisions or []]
     value['job']=job_json(job) if job else None
     return value
+
+def document_list_json(documents,s):
+    if not documents:return []
+    ids=[d.id for d in documents];decisions={};jobs={}
+    for r in s.scalars(select(Decision).where(Decision.document_id.in_(ids)).order_by(Decision.created_at)):
+        decisions.setdefault(r.document_id,[]).append(r)
+    ranked=select(VerificationJob.id,func.row_number().over(partition_by=VerificationJob.document_id,order_by=VerificationJob.created_at.desc()).label('rank')).where(VerificationJob.document_id.in_(ids)).subquery()
+    for job in s.scalars(select(VerificationJob).where(VerificationJob.id.in_(select(ranked.c.id).where(ranked.c.rank==1)))):jobs[job.document_id]=job
+    return [document_json(d,s,decisions.get(d.id,[]),jobs.get(d.id),True) for d in documents]
 def job_json(job):return {**{k:getattr(job,k) for k in ['id','document_id','state','stage','progress','created_at','updated_at','error']},'result':json.loads(job.result),'timeline':json.loads(job.timeline)}
 def visible_documents(u):
     q=select(Document).where(~Document.id.in_(select(Archive.id).where(Archive.kind=='document')))
@@ -359,7 +368,7 @@ def change_password(body:PasswordChange,response:Response,u:Account=Depends(curr
 @app.get('/documents')
 def list_documents(u:Account=Depends(current),s:Session=Depends(db)):
     q=visible_documents(u).order_by(Document.created_at.desc())
-    return [document_json(d,s) for d in s.scalars(q)]
+    return document_list_json(list(s.scalars(q)),s)
 @app.post('/documents',status_code=201)
 async def upload(file:UploadFile=File(...),category:str=Form(...),period:str=Form(...),background:bool=False,u:Account=Depends(current),s:Session=Depends(db)):
     if category not in CATEGORIES or not 1<=len(period.strip())<=80:raise HTTPException(400,'Invalid category or reporting period.')
@@ -510,21 +519,22 @@ def workspace(offset:int=0,search:str='',status:str='',review_only:bool=False,u:
         for r in s.scalars(select(SourceRecord).where(~SourceRecord.id.in_(select(Archive.id)))):
             metric=s.scalar(select(SourceMetric).where(SourceMetric.source_id==r.id))
             sources.append({**{k:getattr(r,k) for k in ['id','sha256','college','category','period','issuer','reference']},'placements':metric.value if metric else None})
-    return {'user':account_json(u),'documents':[document_json(d,s) for d in documents],'ledger':anchors,'sources':sources,'counts':counts,'total':sum(counts.values()),'matching':matching,'offset':offset,'revision':workspace_revision(u,s),'updated_at':now(),'services':health()['blockchain'],'processing_enabled':os.getenv('AUTO_VERIFY','false').lower()=='true','limit':100}
+    return {'user':account_json(u),'documents':document_list_json(documents,s),'ledger':anchors,'sources':sources,'counts':counts,'total':sum(counts.values()),'matching':matching,'offset':offset,'revision':workspace_revision(u,s),'updated_at':now(),'services':health()['blockchain'],'processing_enabled':os.getenv('AUTO_VERIFY','false').lower()=='true','limit':100}
 
 @app.get('/events')
 async def events(request:Request,u:Account=Depends(current)):
+    def read_revision():
+        with SessionLocal() as s:
+            raw=request.headers.get('authorization','').removeprefix('Bearer ')
+            auth=HTTPAuthorizationCredentials(scheme='Bearer',credentials=raw) if raw else None
+            return workspace_revision(current(request,auth,s),s)
     async def stream():
         last='';started=time.monotonic()
         # Bounded streams reconnect automatically, releasing DB connections between pulses.
         while time.monotonic()-started<45 and not await request.is_disconnected():
-            with SessionLocal() as s:
-                raw=request.headers.get('authorization','').removeprefix('Bearer ')
-                auth=HTTPAuthorizationCredentials(scheme='Bearer',credentials=raw) if raw else None
-                try:live_user=current(request,auth,s)
-                except HTTPException:
-                    yield 'event: session-expired\ndata: {}\n\n';return
-                revision=workspace_revision(live_user,s)
+            try:revision=await asyncio.to_thread(read_revision)
+            except HTTPException:
+                yield 'event: session-expired\ndata: {}\n\n';return
             if revision!=last:
                 yield 'event: workspace\ndata: '+canonical({'revision':revision,'at':now()})+'\n\n';last=revision
             else:yield 'event: heartbeat\ndata: '+canonical({'at':now()})+'\n\n'
