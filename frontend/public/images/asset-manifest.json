@@ -1,0 +1,110 @@
+[
+  {
+    "file": "atrium-960.webp",
+    "source_dimensions": [
+      1672,
+      941
+    ],
+    "dimensions": [
+      960,
+      540
+    ],
+    "bytes": 44674
+  },
+  {
+    "file": "atrium-1920.webp",
+    "source_dimensions": [
+      1672,
+      941
+    ],
+    "dimensions": [
+      1920,
+      1081
+    ],
+    "bytes": 178136
+  },
+  {
+    "file": "atrium-2560.webp",
+    "source_dimensions": [
+      1672,
+      941
+    ],
+    "dimensions": [
+      2560,
+      1441
+    ],
+    "bytes": 252564
+  },
+  {
+    "file": "trace-960.webp",
+    "source_dimensions": [
+      1672,
+      941
+    ],
+    "dimensions": [
+      960,
+      540
+    ],
+    "bytes": 58946
+  },
+  {
+    "file": "trace-1920.webp",
+    "source_dimensions": [
+      1672,
+      941
+    ],
+    "dimensions": [
+      1920,
+      1081
+    ],
+    "bytes": 174988
+  },
+  {
+    "file": "trace-2560.webp",
+    "source_dimensions": [
+      1672,
+      941
+    ],
+    "dimensions": [
+      2560,
+      1441
+    ],
+    "bytes": 231592
+  },
+  {
+    "file": "vault-960.webp",
+    "source_dimensions": [
+      1672,
+      941
+    ],
+    "dimensions": [
+      960,
+      540
+    ],
+    "bytes": 49294
+  },
+  {
+    "file": "vault-1920.webp",
+    "source_dimensions": [
+      1672,
+      941
+    ],
+    "dimensions": [
+      1920,
+      1081
+    ],
+    "bytes": 169524
+  },
+  {
+    "file": "vault-2560.webp",
+    "source_dimensions": [
+      1672,
+      941
+    ],
+    "dimensions": [
+      2560,
+      1441
+    ],
+    "bytes": 235156
+  }
+]

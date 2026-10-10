@@ -4,7 +4,7 @@ Independent working prototype. No NAAC affiliation; no accreditation grades.
 
 ## Experience
 
-React + TypeScript + Tailwind, Framer Motion, Three.js and GSAP ScrollTrigger. A continuous procedural evidence core responds to scroll and pointer movement across the landing page, authentication and workspace. Reduced motion, keyboard navigation, modal focus containment, responsive layouts and a WebGL fallback are included. There are no runtime sample users, seeded dashboards or fabricated verification responses.
+React + TypeScript + Tailwind, Framer Motion, Three.js and GSAP ScrollTrigger. The landing page is a cinematic three-scene image journey with custom architectural art, responsive WebP backgrounds, scroll-linked camera movement, a source-to-archive reveal and a fine-pointer depth response. Reduced motion renders stationary chapter backgrounds and removes ambient animation. Authentication and the workspace retain their procedural background; the landing route no longer loads that WebGL scene. Keyboard navigation, modal focus containment and responsive layouts are included. There are no runtime sample users, seeded dashboards or fabricated verification responses. Image provenance and generation prompts are recorded in frontend/public/images/ASSET_NOTES.md.
 
 ## Authentication and access
 
