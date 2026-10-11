@@ -7,6 +7,7 @@ from reportlab.pdfgen import canvas
 
 import institutional_original as institutional
 import verification
+import main
 from authenticity import assessment, finding
 from test_workflow import account
 
@@ -58,6 +59,25 @@ def test_full_job_returns_genuine_file_for_each_category(client,monkeypatch,cate
     assert result['verification_response']['outcome']=='genuine' and result['status']=='verified'
     assert not result['job']['result']['assessment']['verification_eligible']
     assert result['decisions']==[] and client.get('/ledger',headers=owner).json()==[]
+
+
+@pytest.mark.parametrize('view',['detail','list'])
+def test_polling_refreshes_document_and_job_in_same_snapshot(client,monkeypatch,view):
+    owner=account(client);original=report()
+    transport(monkeypatch,lambda request:httpx.Response(200,content=original))
+    uploaded=client.post('/documents?background=true',headers=owner,data={'category':'Infrastructure','period':'2025'},files={'file':('original.pdf',original,'application/pdf')}).json()
+    with main.SessionLocal() as reader:
+        # Simulate a polling request loading the document just before the worker
+        # commits its successful comparison in another session.
+        stale=reader.get(main.Document,uploaded['id'])
+        queued=reader.scalar(main.select(main.VerificationJob).where(main.VerificationJob.document_id==stale.id))
+        assert queued.state=='queued' and stale.status=='unverified'
+        verification.process_next()
+        result=main.document_json(stale,reader) if view=='detail' else main.document_list_json([stale],reader)[0]
+        assert result['job']['state']=='complete'
+        assert result['job']['result']['institutional_original']['state']=='matched'
+        assert result['verification_response']['outcome']=='genuine'
+        assert result['status']=='verified'
 
 
 @pytest.mark.parametrize('body',[b'<html>Unavailable</html>',report(identifier='IR-O-U-0220'),report(year='2024'),b'%PDF-broken'])

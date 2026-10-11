@@ -201,12 +201,19 @@ def get_document(s,id,user,lock=False):
     if not doc or s.get(Archive,id) or (user.role!='reviewer' and doc.owner_id!=user.id): raise HTTPException(404,'Document not found.')
     return doc
 def account_json(u):return {k:getattr(u,k) for k in ['id','name','email','college','role']}
+def document_evidence_rows(ids,s):
+    # One database statement keeps document checks and their latest job in the
+    # same snapshot. The worker can finish between separate polling queries.
+    ranked=select(VerificationJob.id,func.row_number().over(partition_by=VerificationJob.document_id,order_by=VerificationJob.created_at.desc()).label('rank')).where(VerificationJob.document_id.in_(ids)).subquery()
+    query=select(Document,VerificationJob).outerjoin(VerificationJob,(VerificationJob.document_id==Document.id)&VerificationJob.id.in_(select(ranked.c.id).where(ranked.c.rank==1))).where(Document.id.in_(ids))
+    return list(s.execute(query.execution_options(populate_existing=True)))
+
 def document_json(d,s,decisions=None,job=None,loaded=False):
+    if not loaded:
+        d,job=document_evidence_rows([d.id],s)[0]
+        decisions=list(s.scalars(select(Decision).where(Decision.document_id==d.id).order_by(Decision.created_at)))
     value={k:getattr(d,k) for k in ['id','filename','college','category','period','sha256','status','created_at','text','ai']}
     value['checks']=json.loads(d.checks)
-    if not loaded:
-        decisions=list(s.scalars(select(Decision).where(Decision.document_id==d.id).order_by(Decision.created_at)))
-        job=s.scalar(select(VerificationJob).where(VerificationJob.document_id==d.id).order_by(VerificationJob.created_at.desc()))
     value['decisions']=[{k:getattr(r,k) for k in ['id','outcome','reason','evidence','created_at','reviewer']} for r in decisions or []]
     value['job']=job_json(job) if job else None
     from document_response import verification_response
@@ -232,12 +239,11 @@ def document_json(d,s,decisions=None,job=None,loaded=False):
 
 def document_list_json(documents,s):
     if not documents:return []
-    ids=[d.id for d in documents];decisions={};jobs={}
+    ids=[d.id for d in documents];decisions={}
     for r in s.scalars(select(Decision).where(Decision.document_id.in_(ids)).order_by(Decision.created_at)):
         decisions.setdefault(r.document_id,[]).append(r)
-    ranked=select(VerificationJob.id,func.row_number().over(partition_by=VerificationJob.document_id,order_by=VerificationJob.created_at.desc()).label('rank')).where(VerificationJob.document_id.in_(ids)).subquery()
-    for job in s.scalars(select(VerificationJob).where(VerificationJob.id.in_(select(ranked.c.id).where(ranked.c.rank==1)))):jobs[job.document_id]=job
-    return [document_json(d,s,decisions.get(d.id,[]),jobs.get(d.id),True) for d in documents]
+    rows={d.id:(d,job) for d,job in document_evidence_rows(ids,s)}
+    return [document_json(rows[id][0],s,decisions.get(id,[]),rows[id][1],True) for id in ids]
 def job_json(job):return {**{k:getattr(job,k) for k in ['id','document_id','state','stage','progress','created_at','updated_at','error']},'result':json.loads(job.result),'timeline':json.loads(job.timeline)}
 def visible_documents(u):
     q=select(Document).where(~Document.id.in_(select(Archive.id).where(Archive.kind=='document')))
