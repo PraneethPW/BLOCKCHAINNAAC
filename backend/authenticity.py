@@ -5,7 +5,7 @@ import unicodedata
 from datetime import datetime, timezone
 from pypdf import PdfReader
 
-ENGINE_VERSION = '3.4'
+ENGINE_VERSION = '3.5'
 
 
 def normal(value):
@@ -202,9 +202,10 @@ def assessment(checks):
     source = next((c for c in checks if c['name'] == 'Authorized source comparison'), {})
     supported = source.get('state') == 'pass'
     publisher=any(c['name']=='Publisher original comparison' and c['state']=='pass' for c in checks)
-    return dict(engine_version=ENGINE_VERSION, state='conflicting_evidence' if blocking else 'source_match_review_required' if supported else 'not_established',
-                headline='Conflicting evidence' if blocking else 'Genuine — matches registered issuer original' if supported else 'Genuine — matches publisher original' if publisher else 'Neutral',
-                file_verification_eligible=(supported or publisher) and not blocking,
+    institutional=any(c['name']=='Official institutional original comparison' and c['state']=='pass' for c in checks)
+    return dict(engine_version=ENGINE_VERSION, state='conflicting_evidence' if blocking else 'source_match_review_required' if supported else 'file_source_matched' if publisher or institutional else 'not_established',
+                headline='Conflicting evidence' if blocking else 'Genuine — matches registered issuer original' if supported else 'Genuine — matches official institutional original' if institutional else 'Genuine — matches publisher original' if publisher else 'Neutral',
+                file_verification_eligible=(supported or publisher or institutional) and not blocking,
                 verification_eligible=supported and not blocking, blocking_checks=blocking,
                 missing_evidence=[] if supported else ['Exact file comparison to a reviewer-registered issuer source for the same institution, category and period'],
                 assessed_at=datetime.now(timezone.utc).isoformat(),

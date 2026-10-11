@@ -11,6 +11,7 @@ from urllib.parse import quote
 import httpx
 from source_discovery import discover_title
 from publisher_original import compare_publisher_original
+from institutional_original import compare_institutional_original, identity as institutional_identity
 from pypdf import PdfReader
 from pypdf.errors import PdfReadError
 from sqlalchemy import select, text
@@ -170,7 +171,7 @@ def process_next():
                         message=f"{attempt['provider']}: "+('unavailable' if attempt['state']=='unavailable' else f"{attempt['returned_count']} record(s) returned")
                         stage(message,min(78,55+int(23*len(searches)/expected)))
                     if doc.category!='Research publications':
-                        discovery_reason='Publication registries do not verify this evidence category. An authorized issuer record is required.'
+                        discovery_reason='Official NIRF Overall reports are compared directly with the NIRF original when their report identity is readable. Other institutional records require an independent issuer original; publication registries cannot authenticate this category.'
                     elif metadata['dois']:
                         asyncio.run(corroborate(metadata['dois'],metadata['claims']['front_matter'],received))
                     elif metadata['claims']['query_title']:
@@ -178,6 +179,9 @@ def process_next():
                     else:
                         discovery_reason='No usable article title or front-page DOI could be extracted. Provide a readable first page or issuer record.'
                     publisher=asyncio.run(compare_publisher_original(data,metadata,doc.category))
+                    if metadata['format']=='pdf' and institutional_identity(metadata.get('front_page_text','')):
+                        stage('Comparing official institutional original',75)
+                    institutional=asyncio.run(compare_institutional_original(data,metadata))
                     stage('Comparing evidence and institutional context',85)
                     s.refresh(doc,with_for_update=True);doc.text=content;run_checks(doc,s,include_completed=False,inspection_metadata=metadata)
                     checks=json.loads(doc.checks)+observations
@@ -189,13 +193,15 @@ def process_next():
                     checks.extend(publication_checks(metadata['claims'],results,doc.category))
                     if publisher['state']!='not_applicable':
                         checks.append(finding('Publisher original comparison','pass' if publisher['state']=='matched' else 'unknown',publisher['detail']))
+                    if institutional['state']!='not_applicable':
+                        checks.append(finding('Official institutional original comparison','pass' if institutional['state']=='matched' else 'unknown',institutional['detail']))
                     if metadata['claims']['reference_dois']:
                         checks.append(finding('Bibliography identifier scope','unknown',f'{len(metadata["claims"]["reference_dois"])} reference DOI(s) excluded from article authentication. Cited publications can be genuine even when the submitted document is fabricated.'))
                     if metadata['claims']['unclassified_dois'] or metadata['claims']['identifier_limit_exceeded']:
                         checks.append(finding('Identifier coverage','unknown','Some identifiers were outside the front matter or exceeded the query limit. Their roles require manual review; no authenticity was inferred.'))
-                    checks.append(finding('Institutional authorship','unknown','Publication metadata and author names do not establish that this institution produced or owns the submission. Obtain authorized institutional evidence.'))
+                    checks.append(finding('Institutional authorship','unknown','A public original authenticates its file, not the uploading institution\'s ownership or the truth of reported claims. Institutional claim support requires authorized evidence.'))
                     doc.checks=canonical(checks)
-                    job.result=canonical({'engine_version':ENGINE_VERSION,'assessment':assessment(checks),'metadata':metadata,'sources':results,'searches':searches,'publisher_original':publisher,'discovery_reason':discovery_reason,'checks':checks,'checked_at':timestamp(),'limitations':['Reference DOIs and related title search results do not authenticate the uploaded article.','Publisher comparison is limited to supported Nature DOI PDF originals.','Public registries and publisher files do not establish institutional authorship.','Certificate trust and private issuer records require authorized access.']})
+                    job.result=canonical({'engine_version':ENGINE_VERSION,'assessment':assessment(checks),'metadata':metadata,'sources':results,'searches':searches,'publisher_original':publisher,'institutional_original':institutional,'discovery_reason':discovery_reason,'checks':checks,'checked_at':timestamp(),'limitations':['Reference DOIs and related title search results do not authenticate the uploaded article.','Publisher comparison is limited to supported Nature DOI PDF originals.','Institutional public comparison supports identifiable NIRF Overall PDF reports.','A public original match authenticates the file, not the truth of institutional claims or ownership.','Certificate trust and private issuer records require authorized access.']})
                     job.state='complete';job.progress=100;job.error='';job.updated_at=timestamp()
                     record_automatic_assessment(doc,job)
                     if not s.scalar(select(Decision).where(Decision.document_id==doc.id)):

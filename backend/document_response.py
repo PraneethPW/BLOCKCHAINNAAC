@@ -9,6 +9,7 @@ def verification_response(document):
     warnings=[c for c in checks if c['state']=='warn']
     issuer=next((c for c in checks if c['name']=='Authorized source comparison' and c['state']=='pass'),None)
     publisher=next((c for c in checks if c['name']=='Publisher original comparison' and c['state']=='pass'),None)
+    institutional=next((c for c in checks if c['name']=='Official institutional original comparison' and c['state']=='pass'),None)
     complete=bool(job and job['state']=='complete' and job['result'].get('engine_version')==ENGINE_VERSION)
 
     def result(code,title,reason,action,tone='neutral',acceptance='not_verified',outcome='neutral',mode='automated'):
@@ -50,6 +51,9 @@ def verification_response(document):
     if not complete:
         return result('checks_required','Neutral','This file has not completed the current automated inspection.',
                       'Select Recheck now to run the current automatic checks.')
+    if institutional and not issuer:
+        return result('institutional_match','Genuine — matches official institutional original',institutional['detail'],
+                      'Public sources shows the official institution, report year, URL and both fingerprints. This confirms the original report file, not the truth of every reported claim or ownership by the uploading college.','success','accepted','genuine')
     if publisher and not issuer:
         return result('publisher_match','Genuine — matches publisher original',publisher['detail'],
                       'The official PDF URL, publisher fingerprint and comparison time are in Public sources. This result verifies the published file, not your institution\'s ownership of its claims.','success','accepted','genuine')

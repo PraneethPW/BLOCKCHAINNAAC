@@ -563,6 +563,10 @@ def evidence_report(id:str,u:Account=Depends(current),s:Session=Depends(db)):
         paragraph(f"Job: {job['id']} / {job['state']} / {job['stage']} / {job['progress']}%\nUpdated: {job['updated_at']}")
         if job.get('error'):paragraph('Processing error: '+job['error'])
         publisher=job.get('result',{}).get('publisher_original')
+        institutional=job.get('result',{}).get('institutional_original')
+        if institutional and institutional['state']!='not_applicable':
+            paragraph('Official institutional original comparison','Heading2')
+            paragraph(f"Result: {institutional['state']}\nInstitution: {institutional['institution']}\nReport: {institutional['identifier']} / {institutional['year']}\nSource: {institutional['url']}\nChecked: {institutional['checked_at']}\nOfficial SHA-256: {institutional['source_sha256']}\nUploaded SHA-256: {institutional['uploaded_sha256']}\n{institutional['detail']}")
         if publisher and publisher['state']!='not_applicable':
             paragraph('Independent publisher original comparison','Heading2')
             paragraph(f"Result: {publisher['state']}\nSource: {publisher['url']}\nDOI: {publisher['doi']}\nChecked: {publisher['checked_at']}\nPublisher SHA-256: {publisher['publisher_sha256']}\nUploaded SHA-256: {publisher['uploaded_sha256']}\n{publisher['detail']}")
