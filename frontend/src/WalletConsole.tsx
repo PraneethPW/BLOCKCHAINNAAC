@@ -26,7 +26,7 @@ export default function WalletConsole({revision,openDocument}:{revision:string;o
    const chain=await provider.request({method:'eth_chainId'});
    if(chain!=='0xaa36a7'){
     try{await provider.request({method:'wallet_switchEthereumChain',params:[{chainId:'0xaa36a7'}]});}
-    catch(e){if((e as {code?:number}).code!==4902)throw e;await provider.request({method:'wallet_addEthereumChain',params:[{chainId:'0xaa36a7',chainName:'Sepolia',nativeCurrency:{name:'Sepolia Ether',symbol:'ETH',decimals:18},rpcUrls:['https://endpoints.omniatech.io/v1/eth/sepolia/public'],blockExplorerUrls:['https://sepolia.etherscan.io']}]});}
+    catch(e){if((e as {code?:number}).code!==4902)throw e;await provider.request({method:'wallet_addEthereumChain',params:[{chainId:'0xaa36a7',chainName:'Sepolia',nativeCurrency:{name:'Sepolia Ether',symbol:'ETH',decimals:18},rpcUrls:['https://ethereum-sepolia-rpc.publicnode.com'],blockExplorerUrls:['https://sepolia.etherscan.io']}]});}
    }
   }
   const accounts=await provider.request({method:'eth_requestAccounts'}) as string[];const address=accounts[0];
