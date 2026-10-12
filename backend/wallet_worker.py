@@ -24,9 +24,18 @@ def check_proof(entry,s):
     result=dict(state='pending',matched=False,network=entry.network,transaction=entry.tx_hash,contract=entry.contract_address,cid=entry.cid,detail='A successful matching blockchain receipt is required.')
     if not entry.tx_hash or not entry.contract_address:return result
     try:
+        persisted=s.get(NetworkConfig,'wallet-v1:'+entry.network)
+        expected=os.getenv('VAULT_CONTRACT_ADDRESS','') if entry.network=='sepolia' else (persisted.address if persisted else '')
+        if not expected or entry.contract_address.lower()!=expected.lower() or (persisted and persisted.address.lower()!=expected.lower()):
+            result.update(state='mismatch',detail='The reference does not use the configured Veris vault contract.')
+            return result
         w3,chain_id=chain(entry.network);receipt=w3.eth.get_transaction_receipt(entry.tx_hash)
         block=w3.eth.get_block(receipt.blockNumber)
         contract=w3.eth.contract(address=Web3.to_checksum_address(entry.contract_address),abi=artifact()['abi'])
+        key=os.getenv('VAULT_PRIVATE_KEY','') if entry.network=='sepolia' else os.getenv('LEDGER_PRIVATE_KEY','')
+        if not key or contract.functions.writer().call()!=w3.eth.account.from_key(key).address:
+            result.update(state='mismatch',detail='The vault writer differs from the configured Veris transaction writer.')
+            return result
         row=contract.functions.getDocument(opaque(entry.document_id)).call()
         events=contract.events.DocumentStored().process_receipt(receipt)
         consent=hashlib.sha256(entry.consent.encode()).digest()

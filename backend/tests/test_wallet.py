@@ -96,3 +96,13 @@ def test_worker_rejects_changed_encrypted_staging_before_upload(client,monkeypat
         entry=s.get(wallet.WalletDocument,doc['id'])
         assert entry.state=='failed' and not entry.cid and not entry.tx_hash
         assert 'integrity validation' in entry.error
+
+def test_proof_rejects_a_substituted_contract_without_rpc(client,monkeypatch):
+    import wallet_worker
+    owner,key=setup(client,monkeypatch);doc=upload(client,owner)
+    client.post('/wallet/documents',headers=owner,json=signed(client,owner,key,doc['id']))
+    monkeypatch.setenv('VAULT_CONTRACT_ADDRESS','0xCdC2f287653bAcA5E5801cC551d93f738C5cFd5B')
+    with main.SessionLocal() as s:
+        entry=s.get(wallet.WalletDocument,doc['id']);entry.network='sepolia';entry.tx_hash='0x'+'1'*64;entry.contract_address='0x'+'2'*40;s.commit()
+        result=wallet_worker.check_proof(entry,s)
+        assert result['state']=='mismatch' and not result['matched'] and 'configured Veris vault' in result['detail']
