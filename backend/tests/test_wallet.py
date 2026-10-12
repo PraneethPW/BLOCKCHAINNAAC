@@ -28,8 +28,62 @@ def test_signature_ownership_replay_and_account_isolation(client,monkeypatch):
     assert client.post('/wallet/connect',headers=owner,json=body).status_code==403
     other=account(client,'other@example.com')
     assert client.post('/wallet/connect',headers=other,json=body).status_code==403
-    assert client.post('/wallet/challenge',headers=other,json={'address':key.address}).status_code==409
+    assert client.post('/wallet/challenge',headers=other,json={'address':key.address}).status_code==201
     assert client.get('/wallet',headers=other).json()['address'] is None
+
+def test_same_wallet_requires_independent_signatures_and_keeps_documents_private(client,monkeypatch):
+    first,key=setup(client,monkeypatch)
+    doc=upload(client,first)
+    save_body=signed(client,first,key,doc['id'])
+    assert client.post('/wallet/documents',headers=first,json=save_body).status_code==202
+    original_signature=signed(client,first,key)
+    second=account(client,'second@example.com')
+    assert client.post('/wallet/connect',headers=second,json=original_signature).status_code==403
+    # A public address alone is not proof of wallet ownership.
+    request=client.post('/wallet/challenge',headers=second,json={'address':key.address}).json()
+    assert 'second@example.com' in request['message']
+    wrong=Account.create()
+    invalid=dict(challenge_id=request['challenge_id'],signature=Account.sign_message(encode_defunct(text=request['message']),wrong.key).signature.hex())
+    assert client.post('/wallet/connect',headers=second,json=invalid).status_code==403
+    body=signed(client,second,key)
+    assert client.post('/wallet/connect',headers=second,json=body).status_code==200
+    assert client.post('/wallet/connect',headers=second,json=body).status_code==403
+    for owner in (first,second):
+        assert client.get('/wallet',headers=owner).json()['address']==key.address
+    assert client.get('/wallet',headers=second).json()['documents']==[]
+    assert len(client.get('/wallet',headers=first).json()['documents'])==1
+    for suffix in ('file','proof','retry'):
+        method=client.post if suffix=='retry' else client.get
+        assert method('/wallet/documents/'+doc['id']+'/'+suffix,headers=second).status_code==404
+    assert client.post('/wallet/challenge',headers=second,json={'address':key.address,'document_id':doc['id']}).status_code==404
+    second_doc=upload(client,second,b'Separate account evidence.')
+    assert client.post('/wallet/documents',headers=second,json=signed(client,second,key,second_doc['id'])).status_code==202
+    assert [d['document_id'] for d in client.get('/wallet',headers=first).json()['documents']]==[doc['id']]
+    assert [d['document_id'] for d in client.get('/wallet',headers=second).json()['documents']]==[second_doc['id']]
+
+def test_connect_cannot_replace_binding_created_after_challenge(client):
+    owner=account(client);first,second=Account.create(),Account.create()
+    pending=signed(client,owner,second)
+    assert client.post('/wallet/connect',headers=owner,json=signed(client,owner,first)).status_code==200
+    assert client.post('/wallet/connect',headers=owner,json=pending).status_code==409
+    assert client.get('/wallet',headers=owner).json()['address']==first.address
+
+def test_wallet_schema_upgrade_preserves_rows_and_user_uniqueness(tmp_path):
+    from sqlalchemy import create_engine,text
+    from sqlalchemy.exc import IntegrityError
+    from schema_migrations import migrate_wallet_bindings
+    engine=create_engine('sqlite:///'+str(tmp_path/'legacy-wallet.db'))
+    with engine.begin() as c:
+        c.execute(text('CREATE TABLE veris_wallet_bindings (user_id VARCHAR(36) PRIMARY KEY, address VARCHAR(42) NOT NULL UNIQUE, connected_at VARCHAR(40) NOT NULL)'))
+        c.execute(text("INSERT INTO veris_wallet_bindings VALUES ('first','0xabc','2026-10-12')"))
+    migrate_wallet_bindings(engine)
+    migrate_wallet_bindings(engine)
+    with engine.begin() as c:
+        assert c.execute(text('SELECT * FROM veris_wallet_bindings')).all()==[('first','0xabc','2026-10-12')]
+        c.execute(text("INSERT INTO veris_wallet_bindings VALUES ('second','0xabc','2026-10-13')"))
+    with pytest.raises(IntegrityError):
+        with engine.begin() as c:c.execute(text("INSERT INTO veris_wallet_bindings VALUES ('first','0xdef','2026-10-13')"))
+    engine.dispose()
 
 def test_expired_challenge_and_no_wallet_reassignment(client):
     owner=account(client);key=Account.create();body=signed(client,owner,key)

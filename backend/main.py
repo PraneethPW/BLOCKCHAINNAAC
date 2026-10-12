@@ -326,6 +326,8 @@ def store_file(data,ext):
 async def lifespan(app):
     STORAGE.mkdir(parents=True,exist_ok=True)
     Base.metadata.create_all(engine)
+    from schema_migrations import migrate_wallet_bindings
+    migrate_wallet_bindings(engine)
     async def anchor_loop():
         from anchor_worker import process
         from wallet_worker import process as wallet_process

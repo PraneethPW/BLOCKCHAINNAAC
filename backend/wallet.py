@@ -21,7 +21,7 @@ MAGIC=b'VERIS-VAULT-1\0'
 class WalletBinding(Base):
     __tablename__='veris_wallet_bindings'
     user_id:Mapped[str]=mapped_column(String(36),primary_key=True)
-    address:Mapped[str]=mapped_column(String(42),unique=True)
+    address:Mapped[str]=mapped_column(String(42))
     connected_at:Mapped[str]=mapped_column(String(40),default=now)
 
 class WalletChallenge(Base):
@@ -110,8 +110,7 @@ class SignedInput(BaseModel):
 def challenge(body:ChallengeInput,request:Request,u:Account=Depends(current),s:Session=Depends(db)):
     wallet=address(body.address)
     existing=s.get(WalletBinding,u.id)
-    other=s.scalar(select(WalletBinding).where(WalletBinding.address==wallet,WalletBinding.user_id!=u.id))
-    if other or (existing and existing.address!=wallet):raise HTTPException(409,'Use the wallet already linked to this workspace. Wallet ownership cannot be reassigned to another account.')
+    if existing and existing.address!=wallet:raise HTTPException(409,'This Veris account already has a linked wallet. Select '+existing.address+' in your wallet app to continue.')
     domain=request.headers.get('origin') or os.getenv('FRONTEND_ORIGINS','http://localhost:5173').split(',')[0]
     nonce=secrets.token_hex(16);expires=(datetime.now(timezone.utc)+timedelta(minutes=5)).isoformat()
     if body.document_id:
@@ -124,8 +123,8 @@ def challenge(body:ChallengeInput,request:Request,u:Account=Depends(current),s:S
         cfg=config()
         if not cfg['pinata_configured'] or not cfg['encryption_configured']:raise HTTPException(503,'Encrypted IPFS storage has not been configured by the operator.')
         action=f"Store document {doc.id}\nSHA-256: {doc.sha256}\nStorage: encrypted IPFS\nRecord network: {cfg['label']}\nI authorize Veris to register this reference for my wallet. This does not declare the file genuine."
-    else:action='Connect this wallet to my signed-in Veris workspace. No token allowance or transfer is requested.'
-    message=f"Veris wallet authorization\nOrigin: {domain}\nWallet: {wallet}\nWorkspace: {u.id}\n{action}\nNonce: {nonce}\nExpires: {expires}"
+    else:action='Connect this wallet to my signed-in Veris workspace. This link does not grant access to documents in other Veris accounts. No token allowance or transfer is requested.'
+    message=f"Veris wallet authorization\nOrigin: {domain}\nWallet: {wallet}\nVeris account: {u.email}\nWorkspace: {u.id}\n{action}\nNonce: {nonce}\nExpires: {expires}"
     c=WalletChallenge(user_id=u.id,address=wallet,document_id=body.document_id,message=message,expires=expires);s.add(c);s.commit()
     return dict(challenge_id=c.id,message=message,expires=expires)
 
@@ -133,12 +132,11 @@ def challenge(body:ChallengeInput,request:Request,u:Account=Depends(current),s:S
 def connect(body:SignedInput,u:Account=Depends(current),s:Session=Depends(db)):
     c=consume(body,u,s,'connect')
     prior=s.get(WalletBinding,u.id)
-    other=s.scalar(select(WalletBinding).where(WalletBinding.address==c.address,WalletBinding.user_id!=u.id))
-    if other or (prior and prior.address!=c.address):raise HTTPException(409,'This workspace or wallet is already linked.')
+    if prior and prior.address!=c.address:raise HTTPException(409,'This Veris account already has a different linked wallet. Select '+prior.address+' in your wallet app to continue.')
     if not prior:s.add(WalletBinding(user_id=u.id,address=c.address))
     try:s.commit()
     except IntegrityError:
-        s.rollback();raise HTTPException(409,'This workspace or wallet was linked by another request.') from None
+        s.rollback();raise HTTPException(409,'This Veris account was linked by another request. Refresh the wallet page to see its saved connection.') from None
     return dict(address=c.address,connected=True)
 
 @router.post('/wallet/documents',status_code=202)

@@ -3,8 +3,9 @@ import {ArrowUpRight,CheckCircle2,Copy,Download,ExternalLink,FileCheck2,FolderLo
 import {api,downloadFile} from './api';
 import DocumentAssessment from './DocumentAssessment';
 import type {Doc} from './types';
+import {chooseWalletAccount,walletRequest} from './walletConnection';
+import type {Provider} from './walletConnection';
 
-type Provider={request:(args:{method:string;params?:unknown[]})=>Promise<unknown>};
 type ProviderInfo={info:{uuid:string;name:string};provider:Provider};
 type Entry={document_id:string;address:string;sha256:string;state:string;cid:string;tx_hash:string;network:string;contract_address:string;error:string;updated_at:string;document:Doc};
 type Vault={address:string|null;services:{network:string;chain_id:number;label:string;storage:string;key_custody:string;pinata_configured:boolean;encryption_configured:boolean;record_configured:boolean};documents:Entry[]};
@@ -13,27 +14,32 @@ const short=(value:string)=>value.slice(0,9)+'…'+value.slice(-6);
 const when=(value:string)=>new Date(value).toLocaleString();
 const hex=(text:string)=>'0x'+Array.from(new TextEncoder().encode(text),b=>b.toString(16).padStart(2,'0')).join('');
 
-export default function WalletConsole({revision,openDocument}:{revision:string;openDocument:(id:string)=>void}){
+export default function WalletConsole({revision,openDocument,email}:{revision:string;openDocument:(id:string)=>void;email:string}){
+ const [setupOpen,setSetupOpen]=useState(false),[stage,setStage]=useState('');
  const [vault,setVault]=useState<Vault|null>(null),[documents,setDocuments]=useState<Doc[]>([]),[providers,setProviders]=useState<ProviderInfo[]>([]),[choice,setChoice]=useState(''),[selected,setSelected]=useState(''),[busy,setBusy]=useState(''),[error,setError]=useState(''),[notice,setNotice]=useState(''),[proofs,setProofs]=useState<Record<string,Proof>>({});
  const load=async()=>{const [v,docs]=await Promise.all([api<Vault>('/wallet'),api<Doc[]>('/documents')]);setVault(v);setDocuments(docs);};
  useEffect(()=>{let active=true;const refresh=()=>Promise.all([api<Vault>('/wallet'),api<Doc[]>('/documents')]).then(([v,d])=>{if(active){setVault(v);setDocuments(d);}}).catch(e=>{if(active)setError(e.message);});void refresh();const timer=setInterval(()=>{if(!document.hidden)void refresh();},7000);return()=>{active=false;clearInterval(timer);};},[revision]);
  useEffect(()=>{const listener=(event:Event)=>{const detail=(event as CustomEvent<ProviderInfo>).detail;setProviders(old=>old.some(p=>p.info.uuid===detail.info.uuid)?old:[...old,detail]);};window.addEventListener('eip6963:announceProvider',listener);window.dispatchEvent(new Event('eip6963:requestProvider'));const fallback=(window as unknown as {ethereum?:Provider}).ethereum;if(fallback)setProviders(old=>old.length?old:[{info:{uuid:'injected',name:'Browser wallet'},provider:fallback}]);return()=>window.removeEventListener('eip6963:announceProvider',listener);},[]);
- const task=async(label:string,fn:()=>Promise<void>)=>{setBusy(label);setError('');setNotice('');try{await fn();await load();}catch(e){const err=e as {message?:string;code?:number};setError(err.code===4001?'You declined the wallet request. Nothing was saved.':err.message||'The wallet request failed.');}finally{setBusy('');}};
+ const task=async(label:string,fn:()=>Promise<void>)=>{setBusy(label);setError('');setNotice('');try{await fn();await load();}catch(e){const err=e as {message?:string;code?:number};setError(err.code===4001?'You declined the wallet request. Nothing was saved.':err.code===-32002?'A request is already open in your wallet. Open the extension and finish or dismiss it before trying again.':err.message||'The wallet request failed.');}finally{setBusy('');setStage('');}};
  const sign=async(document_id='')=>{
   const provider=providers.find(p=>p.info.uuid===choice)?.provider||providers[0]?.provider;
-  if(!provider)throw new Error('Open Veris in a browser with MetaMask or another Ethereum wallet installed.');
+  if(!provider){setSetupOpen(true);throw new Error('No wallet was detected. Set up MetaMask using the steps below, then reload this page in the same browser.');}
+  setStage('Choose or unlock your account in the wallet extension.');
+  const address=await chooseWalletAccount(provider,!document_id);
+  if(vault?.address&&vault.address.toLowerCase()!==address.toLowerCase())throw new Error('Select your linked wallet '+short(vault.address)+' in your wallet extension, then try again.');
   if(vault?.services.network==='sepolia'){
-   const chain=await provider.request({method:'eth_chainId'});
+   setStage('Approve switching to Sepolia in your wallet if requested.');
+   const chain=await walletRequest(provider,'eth_chainId',undefined,15000);
    if(chain!=='0xaa36a7'){
-    try{await provider.request({method:'wallet_switchEthereumChain',params:[{chainId:'0xaa36a7'}]});}
-    catch(e){if((e as {code?:number}).code!==4902)throw e;await provider.request({method:'wallet_addEthereumChain',params:[{chainId:'0xaa36a7',chainName:'Sepolia',nativeCurrency:{name:'Sepolia Ether',symbol:'ETH',decimals:18},rpcUrls:['https://ethereum-sepolia-rpc.publicnode.com'],blockExplorerUrls:['https://sepolia.etherscan.io']}]});}
+    try{await walletRequest(provider,'wallet_switchEthereumChain',[{chainId:'0xaa36a7'}]);}
+    catch(e){if((e as {code?:number}).code!==4902)throw e;await walletRequest(provider,'wallet_addEthereumChain',[{chainId:'0xaa36a7',chainName:'Sepolia',nativeCurrency:{name:'Sepolia Ether',symbol:'ETH',decimals:18},rpcUrls:['https://ethereum-sepolia-rpc.publicnode.com'],blockExplorerUrls:['https://sepolia.etherscan.io']}]);}
    }
   }
-  const accounts=await provider.request({method:'eth_requestAccounts'}) as string[];const address=accounts[0];
-  if(!address)throw new Error('No wallet account was selected.');
-  if(vault?.address&&vault.address.toLowerCase()!==address.toLowerCase())throw new Error('Select your linked wallet '+short(vault.address)+' in your wallet extension.');
+  setStage('Preparing a signature for '+email+'.');
   const challenge=await api<{challenge_id:string;message:string}>('/wallet/challenge',{method:'POST',body:JSON.stringify({address,document_id})});
-  const signature=await provider.request({method:'personal_sign',params:[hex(challenge.message),address]}) as string;
+  setStage('Sign the Veris message in your wallet. This request is for '+email+'.');
+  const signature=await walletRequest(provider,'personal_sign',[hex(challenge.message),address]) as string;
+  setStage('Saving your signed authorization…');
   await api(document_id?'/wallet/documents':'/wallet/connect',{method:'POST',body:JSON.stringify({challenge_id:challenge.challenge_id,signature})});
   setNotice(document_id?'Authorized. Encrypted IPFS storage and blockchain registration are queued.':'Wallet ownership verified and linked to your workspace.');
  };
@@ -41,9 +47,20 @@ export default function WalletConsole({revision,openDocument}:{revision:string;o
  const eligible=documents.filter(d=>!saved.has(d.id));
  return <div className="wallet-console">
   {error&&<div className="form-error" role="alert">{error}</div>}{notice&&<p className="wallet-feedback" role="status"><CheckCircle2 size={18}/>{notice}</p>}
+  {stage&&<p className="wallet-feedback" role="status"><Loader2 className="spin" size={18}/>{stage}</p>}
   {!vault?<div className="loading-panel"><Loader2 className="spin"/>Loading your wallet records…</div>:<>
-   <section className="wallet-identity panel"><div className="wallet-identity-title"><span className="wallet-emblem"><Wallet size={28}/></span><div><span className="eyebrow">YOUR DOCUMENT WALLET</span><h2>{vault.address?'Wallet connected':'Connect your wallet'}</h2><p>{vault.address?'Ownership verified with a one-use wallet signature.':'Link MetaMask or another Ethereum wallet to your existing Veris account.'}</p></div></div>
+   <section className="wallet-identity panel"><div className="wallet-identity-title"><span className="wallet-emblem"><Wallet size={28}/></span><div><span className="eyebrow">YOUR DOCUMENT WALLET</span><h2>{vault.address?'Wallet connected':'Connect your wallet'}</h2><p>{vault.address?'Ownership verified with a one-use wallet signature.':'Choose an account in MetaMask or another Ethereum wallet, then sign to link it.'}</p><p className="wallet-login">Veris account: <strong>{email}</strong></p></div></div>
     {vault.address?<div className="wallet-address"><code>{vault.address}</code><button className="icon-button" aria-label="Copy wallet address" onClick={()=>void task('copy',async()=>{await navigator.clipboard.writeText(vault.address!);setNotice('Wallet address copied.');})}><Copy size={17}/></button></div>:<div className="wallet-connect-actions">{providers.length>1&&<label>Wallet provider<select value={choice||providers[0]?.info.uuid} onChange={e=>setChoice(e.target.value)}>{providers.map(p=><option key={p.info.uuid} value={p.info.uuid}>{p.info.name}</option>)}</select></label>}<button className="button primary" disabled={!!busy} onClick={()=>void task('connect',()=>sign())}>{busy==='connect'?<Loader2 className="spin" size={18}/>:<Wallet size={18}/>}Connect & sign</button>{!providers.length&&<a className="text-link" href="https://metamask.io/download/" target="_blank" rel="noreferrer">Get MetaMask<ExternalLink size={15}/></a>}</div>}
+    {!vault.address&&<div className="wallet-onboarding">
+     <p>You can use a wallet you already own with more than one Veris login. Each login needs its own signature, and documents stay private to the account that uploaded them.</p>
+     <button className="text-link" aria-expanded={setupOpen} aria-controls="wallet-setup" onClick={()=>setSetupOpen(!setupOpen)}>{setupOpen?'Hide wallet setup':'Create a wallet / need help?'}</button>
+     {setupOpen&&<div id="wallet-setup" className="wallet-setup">
+      <h3>Set up your wallet</h3>
+      <ol><li>Open MetaMask in Chrome or Edge. Install it first if it is not available.</li><li>Choose Create a new wallet, or add another account from the wallet’s account menu. Complete setup and keep your password and recovery phrase private.</li><li>Return to this Veris account, reload this page, and click Connect &amp; sign. Select the wallet account you want to use and approve the message.</li></ol>
+      <p>Veris never creates or stores your wallet’s private key. A Veris login and a wallet account are separate.</p>
+      <div className="wallet-connect-actions"><a className="text-link" href="https://metamask.io/download/" target="_blank" rel="noreferrer">Install MetaMask<ExternalLink size={15}/></a><a className="text-link" href="https://support.metamask.io/start/creating-a-new-wallet/" target="_blank" rel="noreferrer">Wallet setup guide<ExternalLink size={15}/></a><button className="text-link" disabled={!!busy} onClick={()=>window.location.reload()}>Reload after setup<RefreshCw size={15}/></button></div>
+     </div>}
+    </div>}
     <div className="wallet-service-grid"><div><span>Record network</span><strong>{vault.services.label}</strong><small>Chain ID {vault.services.chain_id} · service-sponsored transactions</small></div><div><span>Document storage</span><strong>{vault.services.storage}</strong><small>{vault.services.pinata_configured&&vault.services.encryption_configured?'Storage configured':'Operator setup required'}</small></div><div><span>Confirmed wallet records</span><strong>{vault.documents.filter(e=>e.state==='anchored').length}</strong><small>Successful matching contract receipts</small></div></div>
     <p className="evidence-plain-note">The wallet owns document references. Encrypted files live on IPFS; hashes, encrypted CIDs and consent commitments live on-chain. {vault.services.key_custody}</p>
    </section>
