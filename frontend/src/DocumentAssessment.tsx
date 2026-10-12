@@ -10,5 +10,5 @@ export function assessmentLabel(document:Pick<Doc,'status'|'verification_respons
 export default function DocumentAssessment({document}:{document:Pick<Doc,'status'|'verification_response'>}){
  const result=document.verification_response;
  const style=result?result.tone==='success'?'verified':result.tone==='danger'?'flagged':'unverified':document.status;
- return <span className={'badge '+style} title={result?.title}><span/>{assessmentLabel(document)}</span>;
+ return <><span className={'badge '+style} title={result?.title}><span/>{assessmentLabel(document)}</span>{result?.duplicate&&<span className="badge duplicate-badge" title="An identical fingerprint exists among submissions. This does not establish fraud.">Duplicate</span>}</>;
 }

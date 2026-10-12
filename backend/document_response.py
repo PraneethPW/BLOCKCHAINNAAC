@@ -1,5 +1,5 @@
 """Automatic, evidence-scoped document outcomes, separate from fraud adjudication."""
-from authenticity import ENGINE_VERSION
+from authenticity import ENGINE_VERSION, SUPPORTED_COMPLETED_ENGINES
 
 
 def verification_response(document):
@@ -10,13 +10,15 @@ def verification_response(document):
     issuer=next((c for c in checks if c['name']=='Authorized source comparison' and c['state']=='pass'),None)
     publisher=next((c for c in checks if c['name']=='Publisher original comparison' and c['state']=='pass'),None)
     institutional=next((c for c in checks if c['name']=='Official institutional original comparison' and c['state']=='pass'),None)
-    complete=bool(job and job['state']=='complete' and job['result'].get('engine_version')==ENGINE_VERSION)
+    dataset=next((c for c in checks if c['name']=='Reference dataset comparison' and c['state']=='pass'),None)
+    dataset_result=(job or {}).get('result',{}).get('dataset',{})
+    complete=bool(job and job['state']=='complete' and job['result'].get('engine_version') in SUPPORTED_COMPLETED_ENGINES)
 
     def result(code,title,reason,action,tone='neutral',acceptance='not_verified',outcome='neutral',mode='automated'):
         return dict(code=code,title=title,reason=reason,action=action,tone=tone,acceptance=acceptance,
                     outcome=outcome,mode=mode,analysis_complete=complete,
                     checked_at=job['updated_at'] if job else document.get('created_at'),
-                    findings=[c['name'] for c in warnings])
+                    findings=[c['name'] for c in warnings],duplicate=any(c['name']=='Duplicate fingerprint' and c['state']=='warn' for c in checks))
 
     if job and job['state'] in ['queued','running']:
         return result('checking','Checking your document',job['stage'],'The assessment appears automatically when the checks finish.','running','processing','checking')
@@ -45,6 +47,9 @@ def verification_response(document):
                       'The first page or PDF metadata explicitly declares a fictional or synthetic document.' if fabricated else
                       'The first page or PDF metadata identifies a sample, demonstration or unpublished article. This is not original publication or institutional evidence.',
                       'Use the actual published article or official issuer original. A declared sample is not proof of deliberate fraud.','danger','blocked','fabricated' if fabricated else 'non_original')
+    if dataset_result.get('state')=='matched' and dataset_result.get('label')=='fabricated':
+        return result('dataset_fabricated','Fake / fabricated — matches labeled reference',dataset_result['detail'],
+                      'The exact file is recorded as fabricated in the stated reference dataset. This is a dataset-backed file assessment, not an adjudication of deliberate fraud.','danger','blocked','fabricated')
     if blocking:
         return result('evidence_conflict','Conflicting evidence',blocking[0]['detail'],
                       'Compare the stated discrepancy with an independent issuer original. This assessment identifies a conflict, not deliberate fraud.','danger','blocked','conflict')
@@ -57,6 +62,9 @@ def verification_response(document):
     if publisher and not issuer:
         return result('publisher_match','Genuine — matches publisher original',publisher['detail'],
                       'The official PDF URL, publisher fingerprint and comparison time are in Public sources. This result verifies the published file, not your institution\'s ownership of its claims.','success','accepted','genuine')
+    if dataset and not issuer:
+        return result('dataset_match','Genuine — matches reference dataset original',dataset['detail'],
+                      'The exact fingerprint matches the stated dataset original. Inspect its source and labeling scope in Dataset references; this does not prove every institutional claim.','success','accepted','genuine')
     if issuer:
         if document['status']=='verified' and latest and latest['outcome'] in ['verified','appeal_upheld']:
             return result('reviewer_verified','Verified by authorized review',latest['reason'],

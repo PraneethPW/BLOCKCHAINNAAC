@@ -5,7 +5,8 @@ import unicodedata
 from datetime import datetime, timezone
 from pypdf import PdfReader
 
-ENGINE_VERSION = '3.5'
+ENGINE_VERSION = '3.6'
+SUPPORTED_COMPLETED_ENGINES = {'3.5', '3.6'}
 
 
 def normal(value):
@@ -203,9 +204,10 @@ def assessment(checks):
     supported = source.get('state') == 'pass'
     publisher=any(c['name']=='Publisher original comparison' and c['state']=='pass' for c in checks)
     institutional=any(c['name']=='Official institutional original comparison' and c['state']=='pass' for c in checks)
-    return dict(engine_version=ENGINE_VERSION, state='conflicting_evidence' if blocking else 'source_match_review_required' if supported else 'file_source_matched' if publisher or institutional else 'not_established',
-                headline='Conflicting evidence' if blocking else 'Genuine — matches registered issuer original' if supported else 'Genuine — matches official institutional original' if institutional else 'Genuine — matches publisher original' if publisher else 'Neutral',
-                file_verification_eligible=(supported or publisher or institutional) and not blocking,
+    dataset=any(c['name']=='Reference dataset comparison' and c['state']=='pass' for c in checks)
+    return dict(engine_version=ENGINE_VERSION, state='conflicting_evidence' if blocking else 'source_match_review_required' if supported else 'file_source_matched' if publisher or institutional or dataset else 'not_established',
+                headline='Conflicting evidence' if blocking else 'Genuine — matches registered issuer original' if supported else 'Genuine — matches official institutional original' if institutional else 'Genuine — matches publisher original' if publisher else 'Genuine — matches reference dataset original' if dataset else 'Neutral',
+                file_verification_eligible=(supported or publisher or institutional or dataset) and not blocking,
                 verification_eligible=supported and not blocking, blocking_checks=blocking,
                 missing_evidence=[] if supported else ['Exact file comparison to a reviewer-registered issuer source for the same institution, category and period'],
                 assessed_at=datetime.now(timezone.utc).isoformat(),

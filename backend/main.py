@@ -249,7 +249,7 @@ def visible_documents(u):
     q=select(Document).where(~Document.id.in_(select(Archive.id).where(Archive.kind=='document')))
     return q if u.role=='reviewer' else q.where(Document.owner_id==u.id)
 def run_checks(d,s,include_completed=True,inspection_metadata=None):
-    from authenticity import ENGINE_VERSION, declaration_checks, assessment
+    from authenticity import ENGINE_VERSION, SUPPORTED_COMPLETED_ENGINES, declaration_checks, assessment
     checks=[{'name':'SHA-256 fingerprint','state':'pass','kind':'processing','detail':'Calculated from the exact uploaded bytes. This records identity after submission; it does not establish that the file was genuine before upload.'}]
     duplicate=s.scalar(select(Document).where(Document.sha256==d.sha256,Document.id!=d.id,~Document.id.in_(select(Archive.id))))
     checks.append({'name':'Duplicate fingerprint','state':'warn' if duplicate else 'pass','kind':'processing','detail':'A matching submission exists; context needs authorized review.' if duplicate else 'No identical fingerprint in the current registry. New files can still be fabricated.'})
@@ -280,14 +280,14 @@ def run_checks(d,s,include_completed=True,inspection_metadata=None):
     metadata=inspection_metadata or prior.get('metadata',{})
     checks.extend(declaration_checks(d.text,metadata))
     names={c['name'] for c in checks}
-    if prior.get('engine_version')==ENGINE_VERSION:checks.extend(c for c in prior.get('checks',[]) if c['name'] not in names)
+    if prior.get('engine_version') in SUPPORTED_COMPLETED_ENGINES:checks.extend(c for c in prior.get('checks',[]) if c['name'] not in names)
     d.checks=canonical(checks)
     # A completed current full inspection can automatically verify an issuer match.
     # Historical human decisions remain append-only and are never overwritten.
     if not s.scalar(select(Decision).where(Decision.document_id==d.id)):
-        eligible=bool(latest and latest.state=='complete' and prior.get('engine_version')==ENGINE_VERSION and assessment(checks)['file_verification_eligible'])
+        eligible=bool(latest and latest.state=='complete' and prior.get('engine_version') in SUPPORTED_COMPLETED_ENGINES and assessment(checks)['file_verification_eligible'])
         d.status='verified' if eligible else 'flagged' if any(c['state']=='warn' for c in checks) else 'unverified'
-    if prior.get('engine_version')==ENGINE_VERSION:
+    if prior.get('engine_version') in SUPPORTED_COMPLETED_ENGINES:
         prior['checks']=checks;prior['assessment']=assessment(checks);latest.result=canonical(prior)
 def extract(data, ext):
     try:
@@ -328,9 +328,12 @@ async def lifespan(app):
     Base.metadata.create_all(engine)
     async def anchor_loop():
         from anchor_worker import process
+        from wallet_worker import process as wallet_process
         while True:
             try: await asyncio.to_thread(process)
             except Exception: logging.getLogger('veris').warning('Blockchain pass unavailable; queued evidence retained for retry.')
+            try: await asyncio.to_thread(wallet_process)
+            except Exception: logging.getLogger('veris').warning('Wallet storage pass unavailable; authorized originals retained.')
             await asyncio.sleep(20)
     async def verification_loop():
         from verification import process_next
@@ -569,6 +572,10 @@ def evidence_report(id:str,u:Account=Depends(current),s:Session=Depends(db)):
         paragraph(f"Job: {job['id']} / {job['state']} / {job['stage']} / {job['progress']}%\nUpdated: {job['updated_at']}")
         if job.get('error'):paragraph('Processing error: '+job['error'])
         publisher=job.get('result',{}).get('publisher_original')
+        dataset=job.get('result',{}).get('dataset')
+        if dataset:
+            paragraph('Reference dataset comparison','Heading2')
+            paragraph(f"Dataset version: {dataset['version']}\nResult: {dataset['state']} / {dataset.get('label') or 'No assigned label'}\nReference: {dataset.get('reference_id') or 'No exact match'}\nScope: {dataset.get('scope') or 'Unknown file'}\n{dataset['detail']}")
         institutional=job.get('result',{}).get('institutional_original')
         if institutional and institutional['state']!='not_applicable':
             paragraph('Official institutional original comparison','Heading2')
@@ -664,3 +671,7 @@ def source_file(id:str,u:Account=Depends(reviewer),s:Session=Depends(db)):
 
 from accreditation import router as accreditation_router
 app.include_router(accreditation_router)
+from wallet import router as wallet_router
+app.include_router(wallet_router)
+from reference_dataset import router as dataset_router
+app.include_router(dataset_router)

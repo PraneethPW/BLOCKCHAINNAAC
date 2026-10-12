@@ -1,0 +1,56 @@
+import {useEffect,useState} from 'react';
+import {ArrowUpRight,CheckCircle2,Copy,Download,ExternalLink,FileCheck2,FolderLock,Loader2,RefreshCw,ShieldCheck,Wallet} from 'lucide-react';
+import {api,downloadFile} from './api';
+import DocumentAssessment from './DocumentAssessment';
+import type {Doc} from './types';
+
+type Provider={request:(args:{method:string;params?:unknown[]})=>Promise<unknown>};
+type ProviderInfo={info:{uuid:string;name:string};provider:Provider};
+type Entry={document_id:string;address:string;sha256:string;state:string;cid:string;tx_hash:string;network:string;contract_address:string;error:string;updated_at:string;document:Doc};
+type Vault={address:string|null;services:{network:string;chain_id:number;label:string;storage:string;key_custody:string;pinata_configured:boolean;encryption_configured:boolean;record_configured:boolean};documents:Entry[]};
+type Proof={state:string;matched:boolean;detail:string;block?:number};
+const short=(value:string)=>value.slice(0,9)+'…'+value.slice(-6);
+const when=(value:string)=>new Date(value).toLocaleString();
+const hex=(text:string)=>'0x'+Array.from(new TextEncoder().encode(text),b=>b.toString(16).padStart(2,'0')).join('');
+
+export default function WalletConsole({revision,openDocument}:{revision:string;openDocument:(id:string)=>void}){
+ const [vault,setVault]=useState<Vault|null>(null),[documents,setDocuments]=useState<Doc[]>([]),[providers,setProviders]=useState<ProviderInfo[]>([]),[choice,setChoice]=useState(''),[selected,setSelected]=useState(''),[busy,setBusy]=useState(''),[error,setError]=useState(''),[notice,setNotice]=useState(''),[proofs,setProofs]=useState<Record<string,Proof>>({});
+ const load=async()=>{const [v,docs]=await Promise.all([api<Vault>('/wallet'),api<Doc[]>('/documents')]);setVault(v);setDocuments(docs);};
+ useEffect(()=>{let active=true;const refresh=()=>Promise.all([api<Vault>('/wallet'),api<Doc[]>('/documents')]).then(([v,d])=>{if(active){setVault(v);setDocuments(d);}}).catch(e=>{if(active)setError(e.message);});void refresh();const timer=setInterval(()=>{if(!document.hidden)void refresh();},7000);return()=>{active=false;clearInterval(timer);};},[revision]);
+ useEffect(()=>{const listener=(event:Event)=>{const detail=(event as CustomEvent<ProviderInfo>).detail;setProviders(old=>old.some(p=>p.info.uuid===detail.info.uuid)?old:[...old,detail]);};window.addEventListener('eip6963:announceProvider',listener);window.dispatchEvent(new Event('eip6963:requestProvider'));const fallback=(window as unknown as {ethereum?:Provider}).ethereum;if(fallback)setProviders(old=>old.length?old:[{info:{uuid:'injected',name:'Browser wallet'},provider:fallback}]);return()=>window.removeEventListener('eip6963:announceProvider',listener);},[]);
+ const task=async(label:string,fn:()=>Promise<void>)=>{setBusy(label);setError('');setNotice('');try{await fn();await load();}catch(e){const err=e as {message?:string;code?:number};setError(err.code===4001?'You declined the wallet request. Nothing was saved.':err.message||'The wallet request failed.');}finally{setBusy('');}};
+ const sign=async(document_id='')=>{
+  const provider=providers.find(p=>p.info.uuid===choice)?.provider||providers[0]?.provider;
+  if(!provider)throw new Error('Open Veris in a browser with MetaMask or another Ethereum wallet installed.');
+  if(vault?.services.network==='sepolia'){
+   const chain=await provider.request({method:'eth_chainId'});
+   if(chain!=='0xaa36a7'){
+    try{await provider.request({method:'wallet_switchEthereumChain',params:[{chainId:'0xaa36a7'}]});}
+    catch(e){if((e as {code?:number}).code!==4902)throw e;await provider.request({method:'wallet_addEthereumChain',params:[{chainId:'0xaa36a7',chainName:'Sepolia',nativeCurrency:{name:'Sepolia Ether',symbol:'ETH',decimals:18},rpcUrls:['https://endpoints.omniatech.io/v1/eth/sepolia/public'],blockExplorerUrls:['https://sepolia.etherscan.io']}]});}
+   }
+  }
+  const accounts=await provider.request({method:'eth_requestAccounts'}) as string[];const address=accounts[0];
+  if(!address)throw new Error('No wallet account was selected.');
+  if(vault?.address&&vault.address.toLowerCase()!==address.toLowerCase())throw new Error('Select your linked wallet '+short(vault.address)+' in your wallet extension.');
+  const challenge=await api<{challenge_id:string;message:string}>('/wallet/challenge',{method:'POST',body:JSON.stringify({address,document_id})});
+  const signature=await provider.request({method:'personal_sign',params:[hex(challenge.message),address]}) as string;
+  await api(document_id?'/wallet/documents':'/wallet/connect',{method:'POST',body:JSON.stringify({challenge_id:challenge.challenge_id,signature})});
+  setNotice(document_id?'Authorized. Encrypted IPFS storage and blockchain registration are queued.':'Wallet ownership verified and linked to your workspace.');
+ };
+ const saved=new Set(vault?.documents.map(e=>e.document_id));
+ const eligible=documents.filter(d=>!saved.has(d.id));
+ return <div className="wallet-console">
+  {error&&<div className="form-error" role="alert">{error}</div>}{notice&&<p className="wallet-feedback" role="status"><CheckCircle2 size={18}/>{notice}</p>}
+  {!vault?<div className="loading-panel"><Loader2 className="spin"/>Loading your wallet records…</div>:<>
+   <section className="wallet-identity panel"><div className="wallet-identity-title"><span className="wallet-emblem"><Wallet size={28}/></span><div><span className="eyebrow">YOUR DOCUMENT WALLET</span><h2>{vault.address?'Wallet connected':'Connect your wallet'}</h2><p>{vault.address?'Ownership verified with a one-use wallet signature.':'Link MetaMask or another Ethereum wallet to your existing Veris account.'}</p></div></div>
+    {vault.address?<div className="wallet-address"><code>{vault.address}</code><button className="icon-button" aria-label="Copy wallet address" onClick={()=>void task('copy',async()=>{await navigator.clipboard.writeText(vault.address!);setNotice('Wallet address copied.');})}><Copy size={17}/></button></div>:<div className="wallet-connect-actions">{providers.length>1&&<label>Wallet provider<select value={choice||providers[0]?.info.uuid} onChange={e=>setChoice(e.target.value)}>{providers.map(p=><option key={p.info.uuid} value={p.info.uuid}>{p.info.name}</option>)}</select></label>}<button className="button primary" disabled={!!busy} onClick={()=>void task('connect',()=>sign())}>{busy==='connect'?<Loader2 className="spin" size={18}/>:<Wallet size={18}/>}Connect & sign</button>{!providers.length&&<a className="text-link" href="https://metamask.io/download/" target="_blank" rel="noreferrer">Get MetaMask<ExternalLink size={15}/></a>}</div>}
+    <div className="wallet-service-grid"><div><span>Record network</span><strong>{vault.services.label}</strong><small>Chain ID {vault.services.chain_id} · service-sponsored transactions</small></div><div><span>Document storage</span><strong>{vault.services.storage}</strong><small>{vault.services.pinata_configured&&vault.services.encryption_configured?'Storage configured':'Operator setup required'}</small></div><div><span>Confirmed wallet records</span><strong>{vault.documents.filter(e=>e.state==='anchored').length}</strong><small>Successful matching contract receipts</small></div></div>
+    <p className="evidence-plain-note">The wallet owns document references. Encrypted files live on IPFS; hashes, encrypted CIDs and consent commitments live on-chain. {vault.services.key_custody}</p>
+   </section>
+   {vault.address&&<section className="panel wallet-save"><div><h2>Save an original to your wallet</h2><p>Select uploaded evidence and approve its specific fingerprint in your wallet.</p></div><label>Original document<select value={selected} onChange={e=>setSelected(e.target.value)}><option value="">Choose evidence</option>{eligible.map(d=><option key={d.id} value={d.id}>{d.filename} · {d.period}</option>)}</select></label><button className="button primary" disabled={!!busy||!selected||!vault.services.pinata_configured||!vault.services.encryption_configured||!vault.services.record_configured} onClick={()=>void task('save',async()=>{await sign(selected);setSelected('');})}>{busy==='save'?<Loader2 className="spin" size={17}/>:<FolderLock size={17}/>}Sign & save document</button></section>}
+   <section className="wallet-records"><div className="panel-title"><h2>Stored document references</h2><button className="icon-button" aria-label="Refresh wallet records" disabled={!!busy} onClick={()=>void task('refresh',load)}><RefreshCw size={18}/></button></div>
+    {!vault.documents.length?<div className="panel wallet-empty"><FolderLock size={30}/><h3>Your wallet has no document references yet</h3><p>{vault.address?'Save an uploaded original to begin. Verification results remain visible beside every wallet record.':'Connect your wallet, then select an original from your evidence library.'}</p></div>:vault.documents.map(e=><article className="panel wallet-record" key={e.document_id}><header><div><FileCheck2 size={22}/><button onClick={()=>openDocument(e.document_id)}>{e.document.filename}<ArrowUpRight size={16}/></button></div><DocumentAssessment document={e.document}/></header><div className="wallet-record-state"><span className={'badge '+(e.state==='anchored'?'verified':e.state==='failed'?'flagged':'unverified')}><span/>{e.state==='anchored'?'Blockchain receipt confirmed':e.state==='failed'?'Save failed':e.state==='pinning'?'Encrypting & pinning to IPFS':e.state==='pinned'?'IPFS pinned · waiting for blockchain':e.state==='broadcast'?'Transaction submitted':'Save queued'}</span><small>{when(e.updated_at)}</small></div>{e.error&&<p className="form-error">{e.error}</p>}<dl className="wallet-reference-fields"><div><dt>Original SHA-256</dt><dd>{e.sha256}</dd></div><div><dt>Encrypted IPFS CID</dt><dd>{e.cid||'Available after pinning completes'}</dd></div><div><dt>Transaction</dt><dd>{e.tx_hash||'Available after blockchain submission'}</dd></div></dl><div className="wallet-record-actions"><button className="button glass compact" disabled={!!busy||!e.cid} onClick={()=>void task('download-'+e.document_id,async()=>{await downloadFile('/wallet/documents/'+e.document_id+'/file',e.document.filename);setNotice('Downloaded from IPFS; decryption and original fingerprint checked.');})}><Download size={15}/>Retrieve from IPFS</button><button className="button glass compact" disabled={!!busy||!e.tx_hash} onClick={()=>void task('proof-'+e.document_id,async()=>{const p=await api<Proof>('/wallet/documents/'+e.document_id+'/proof');setProofs(old=>({...old,[e.document_id]:p}));})}><ShieldCheck size={15}/>Check blockchain proof</button>{e.state==='failed'&&<button className="button glass compact" disabled={!!busy} onClick={()=>void task('retry',async()=>{await api('/wallet/documents/'+e.document_id+'/retry',{method:'POST'});})}>Retry save</button>}{e.network==='sepolia'&&e.tx_hash&&<a className="text-link" href={'https://sepolia.etherscan.io/tx/'+e.tx_hash} target="_blank" rel="noreferrer">Etherscan<ExternalLink size={14}/></a>}</div>{proofs[e.document_id]&&<p className={'wallet-proof '+(proofs[e.document_id].matched?'matched':'')} role="status"><ShieldCheck size={18}/>{proofs[e.document_id].detail}{proofs[e.document_id].block?' Block '+proofs[e.document_id].block:''}</p>}</article>)}
+   </section>
+  </>}
+ </div>;
+}

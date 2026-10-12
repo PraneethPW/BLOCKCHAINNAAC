@@ -12,7 +12,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-from authenticity import ENGINE_VERSION, normal, assessment
+from authenticity import ENGINE_VERSION, SUPPORTED_COMPLETED_ENGINES, normal, assessment
 from main import (AccreditationClaim, ClaimReview, EvidenceSnapshot, Document,
                   Decision, SourceRecord, SourceMetric, VerificationJob, Anchor,
                   Archive, Account, STORAGE, canonical, now, uid, current,
@@ -54,7 +54,7 @@ def compare_claim(claim, doc, sources, metrics, digest_cache, job=None):
             else:result.update(state='count_evidence_incomplete',detail='A single readable document count and a single authorized issuer count are required. Missing or ambiguous counts cannot support acceptance.')
         exact=any(r.sha256==doc.sha256 for r in issuer)
         if doc.storage_name not in digest_cache:digest_cache[doc.storage_name]=stored_digest(doc.storage_name)
-        current_job=bool(job and job.state=='complete' and json.loads(job.result).get('engine_version')==ENGINE_VERSION)
+        current_job=bool(job and job.state=='complete' and json.loads(job.result).get('engine_version') in SUPPORTED_COMPLETED_ENGINES)
         result['eligible']=bool(current_job and exact and digest_cache[doc.storage_name]==doc.sha256 and doc.status=='verified' and assessment(json.loads(doc.checks))['verification_eligible'] and (claim.quantity is None or result['state']=='counts_agree'))
     if any(c.get('blocking') and c['state']=='warn' for c in json.loads(doc.checks)):
         result.update(eligible=False,document_conflict=True)

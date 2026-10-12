@@ -182,6 +182,8 @@ def process_next():
                     if metadata['format']=='pdf' and institutional_identity(metadata.get('front_page_text','')):
                         stage('Comparing official institutional original',75)
                     institutional=asyncio.run(compare_institutional_original(data,metadata))
+                    from reference_dataset import compare as compare_dataset
+                    dataset=compare_dataset(doc,data,s)
                     stage('Comparing evidence and institutional context',85)
                     s.refresh(doc,with_for_update=True);doc.text=content;run_checks(doc,s,include_completed=False,inspection_metadata=metadata)
                     checks=json.loads(doc.checks)+observations
@@ -195,13 +197,16 @@ def process_next():
                         checks.append(finding('Publisher original comparison','pass' if publisher['state']=='matched' else 'unknown',publisher['detail']))
                     if institutional['state']!='not_applicable':
                         checks.append(finding('Official institutional original comparison','pass' if institutional['state']=='matched' else 'unknown',institutional['detail']))
+                    if dataset['state']=='matched':
+                        checks.append(finding('Reference dataset comparison','pass' if dataset['label']=='genuine' else 'warn' if dataset['label']=='fabricated' else 'unknown',dataset['detail'],blocking=dataset['label']=='fabricated'))
+                    elif dataset['state']=='conflict':checks.append(finding('Reference dataset comparison','warn',dataset['detail'],blocking=True))
                     if metadata['claims']['reference_dois']:
                         checks.append(finding('Bibliography identifier scope','unknown',f'{len(metadata["claims"]["reference_dois"])} reference DOI(s) excluded from article authentication. Cited publications can be genuine even when the submitted document is fabricated.'))
                     if metadata['claims']['unclassified_dois'] or metadata['claims']['identifier_limit_exceeded']:
                         checks.append(finding('Identifier coverage','unknown','Some identifiers were outside the front matter or exceeded the query limit. Their roles require manual review; no authenticity was inferred.'))
                     checks.append(finding('Institutional authorship','unknown','A public original authenticates its file, not the uploading institution\'s ownership or the truth of reported claims. Institutional claim support requires authorized evidence.'))
                     doc.checks=canonical(checks)
-                    job.result=canonical({'engine_version':ENGINE_VERSION,'assessment':assessment(checks),'metadata':metadata,'sources':results,'searches':searches,'publisher_original':publisher,'institutional_original':institutional,'discovery_reason':discovery_reason,'checks':checks,'checked_at':timestamp(),'limitations':['Reference DOIs and related title search results do not authenticate the uploaded article.','Publisher comparison is limited to supported Nature DOI PDF originals.','Institutional public comparison supports identifiable NIRF Overall PDF reports.','A public original match authenticates the file, not the truth of institutional claims or ownership.','Certificate trust and private issuer records require authorized access.']})
+                    job.result=canonical({'engine_version':ENGINE_VERSION,'assessment':assessment(checks),'metadata':metadata,'sources':results,'searches':searches,'publisher_original':publisher,'institutional_original':institutional,'dataset':dataset,'discovery_reason':discovery_reason,'checks':checks,'checked_at':timestamp(),'limitations':['Reference DOIs and related title search results do not authenticate the uploaded article.','Publisher comparison is limited to supported Nature DOI PDF originals.','Institutional public comparison supports identifiable NIRF Overall PDF reports.','A public original match authenticates the file, not the truth of institutional claims or ownership.','Certificate trust and private issuer records require authorized access.']})
                     job.state='complete';job.progress=100;job.error='';job.updated_at=timestamp()
                     record_automatic_assessment(doc,job)
                     if not s.scalar(select(Decision).where(Decision.document_id==doc.id)):
