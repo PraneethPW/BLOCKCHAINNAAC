@@ -155,7 +155,7 @@ Document upload, classification, reference comparisons and reports work without 
 | --- | --- |
 | AI advisory analysis | Set `OPENROUTER_API_KEY`; keep `OPENROUTER_MODEL=openrouter/free` or an available `:free` model. Users must consent before document text is sent. |
 | MetaMask connection | Install/unlock MetaMask in the browser used for the local app, select Sepolia, then use **Document wallet → Connect & sign**. Wallet connection alone does not upload files to IPFS. |
-| Encrypted Pinata/IPFS saves and Sepolia records | Set `PINATA_JWT`, `VAULT_ENCRYPTION_KEY`, `VAULT_SEPOLIA_RPC_URL`, `VAULT_PRIVATE_KEY`, and the actual `VAULT_CONTRACT_ADDRESS`; enable `AUTO_ANCHOR=true` after configuration. The contract's writer must match the backend relay key, and that relay needs Sepolia test ETH. |
+| Encrypted Pinata/IPFS saves and Sepolia records | Set `PINATA_JWT`, `VAULT_ENCRYPTION_KEY`, `VAULT_SEPOLIA_RPC_URL`, `VAULT_PRIVATE_KEY`, and the actual `VAULT_CONTRACT_ADDRESS`; enable `AUTO_WALLET_STORAGE=true` after configuration. The contract's writer must match the backend relay key, and that relay needs Sepolia test ETH. Fraud-audit anchoring can remain disabled. |
 | Fraud audit anchoring | Configure the independent `LEDGER_NETWORK`, corresponding RPC URL, `LEDGER_PRIVATE_KEY` and deployed ledger contract. The fraud ledger and document vault are separate contracts; configuring one does not configure the other. |
 
 Generate a **new** vault encryption key only when configuring a new vault, and retain it for future document retrieval:
@@ -200,7 +200,24 @@ In another terminal, enter `BLOCKCHAINNAAC/frontend`, run `npm install --global 
 | Verification remains queued | Check `AUTO_VERIFY=true`, restart the backend after configuration changes, and inspect its terminal for worker errors. |
 | OCR unavailable | Confirm `tesseract --version` succeeds in the same environment used to start the backend. |
 | Hosted login does not work locally | Register a local account when using SQLite; hosted and local databases are separate. Use one frontend address consistently (`127.0.0.1` or `localhost`), since browser sessions belong to that origin. |
-| Wallet save unavailable or stays queued | Complete the Pinata, encryption, RPC, contract and funded-relay configuration; enable `AUTO_ANCHOR` and restart. MetaMask connection does not supply the backend relay credentials. |
+| Wallet save unavailable or stays queued | Complete the Pinata, encryption, RPC, contract and funded-relay configuration; set `AUTO_WALLET_STORAGE=true` and restart. With that independent switch, `AUTO_ANCHOR=false` can remain unchanged. MetaMask connection does not start the backend worker. |
+
+**Wallet records stuck at "Save queued":** the authorized save exists, but a CID and transaction hash are only added by the background wallet worker. For a configured local Sepolia vault, use these settings and restart the backend:
+
+```dotenv
+AUTO_ANCHOR=false
+AUTO_WALLET_STORAGE=true
+```
+
+Queued saves resume automatically using their existing signed authorization. If a record is already Failed, correct its reported cause and use **Retry save**. Keep the original `VAULT_ENCRYPTION_KEY` for encrypted files already saved; a newly generated key cannot decrypt them. Keep `UPLOAD_DIR` pointing to the folder that contains existing originals. On Windows, an existing `/data/uploads` configuration may have saved files under the current drive's `data/uploads`; do not change the path until those files have been preserved and moved deliberately.
+
+From `backend`, run a read-only diagnostic that reports missing or invalid setting **names**, worker status, database access, missing original files, vault writer compatibility and test-gas balance. It does not print credentials or submit transactions:
+
+```powershell
+.\.venv\Scripts\python.exe diagnose_wallet.py --env-file .env --check-network
+```
+
+**Retrieve from IPFS** requires a real pinned CID and the same encryption key used to save it. **Check blockchain proof** and **View Sepolia transaction** require an actual submitted transaction. Proof checking is read-only: it uses RPC and the configured original vault contract; a signing private key is only needed to submit new transactions. Private-development-network records cannot be viewed on Sepolia. A local SQLite database does not contain wallet records from the hosted Neon database.
 
 ### Local validation commands
 
@@ -268,7 +285,7 @@ Document wallet connects an EIP-6963 or injected Ethereum wallet using expiring,
 
 The backend encrypts originals using AES-256-GCM, uploads only ciphertext to Pinata IPFS, and records the opaque document ID, owner address, original fingerprint, encrypted CID and consent commitment in VerisVault.sol. Documents are not literally stored inside MetaMask or on Ethereum. Decryption keys are backend-managed, derived from VAULT_ENCRYPTION_KEY. Keep that master key backed up: losing it prevents IPFS retrieval. This is not end-to-end or wallet-key encryption. Public on-chain owner addresses and commitments are visible on Sepolia; personal document contents remain encrypted off-chain.
 
-Set PINATA_JWT, VAULT_ENCRYPTION_KEY (32 random bytes as URL-safe base64), VAULT_NETWORK=sepolia, VAULT_SEPOLIA_RPC_URL and a funded test-only VAULT_PRIVATE_KEY in backend environment variables. Compile with node contracts/compile-vault.mjs, deploy using python backend/deploy_vault.py --journal PRIVATE_PERSISTENT_PATH, then set VAULT_CONTRACT_ADDRESS to the actual returned address. Retain the deployment journal for crash recovery. Never put private keys or Pinata credentials in frontend variables. AUTO_ANCHOR=true processes queued wallet saves as well as the existing independent fraud ledger.
+Set PINATA_JWT, VAULT_ENCRYPTION_KEY (32 random bytes as URL-safe base64), VAULT_NETWORK=sepolia, VAULT_SEPOLIA_RPC_URL and a funded test-only VAULT_PRIVATE_KEY in backend environment variables. Compile with node contracts/compile-vault.mjs, deploy using python backend/deploy_vault.py --journal PRIVATE_PERSISTENT_PATH, then set VAULT_CONTRACT_ADDRESS to the actual returned address. Retain the deployment journal for crash recovery. Never put private keys or Pinata credentials in frontend variables. AUTO_WALLET_STORAGE=true processes queued wallet saves independently; AUTO_ANCHOR controls the fraud ledger. If AUTO_WALLET_STORAGE is unset, it follows AUTO_ANCHOR for compatibility with existing installations.
 
 The wallet vault and fraud ledger use separate network configuration and contracts; deploying the Sepolia vault does not migrate or reset the existing private fraud audit. Signed save transactions are persisted before broadcast. A successful receipt, canonical block, emitted event and contract fields must all match before the UI reports a confirmed record. Authenticated IPFS retrieval validates ciphertext integrity, decrypts it and checks the original fingerprint. Save failures and unavailable proofs remain explicit; storage success never makes a document Genuine.
 

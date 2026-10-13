@@ -22,28 +22,38 @@ def opaque(id):return hashlib.sha256(id.encode()).digest()
 
 def check_proof(entry,s):
     result=dict(state='pending',matched=False,network=entry.network,transaction=entry.tx_hash,contract=entry.contract_address,cid=entry.cid,detail='A successful matching blockchain receipt is required.')
-    if not entry.tx_hash or not entry.contract_address:return result
+    if not entry.tx_hash or not entry.contract_address:
+        result['detail']='No blockchain transaction has been submitted for this document yet. The wallet worker must pin the encrypted file and submit its transaction first.'
+        return result
     try:
         persisted=s.get(NetworkConfig,'wallet-v1:'+entry.network)
         expected=os.getenv('VAULT_CONTRACT_ADDRESS','') if entry.network=='sepolia' else (persisted.address if persisted else '')
-        if not expected or entry.contract_address.lower()!=expected.lower() or (persisted and persisted.address.lower()!=expected.lower()):
+        if not expected:
+            result.update(state='unavailable',detail='The vault contract is not configured in this backend. Set the original VAULT_CONTRACT_ADDRESS for Sepolia, or restore the private-network configuration.')
+            return result
+        if entry.contract_address.lower()!=expected.lower() or (persisted and persisted.address.lower()!=expected.lower()):
             result.update(state='mismatch',detail='The reference does not use the configured Veris vault contract.')
+            return result
+        rpc_name='VAULT_SEPOLIA_RPC_URL' if entry.network=='sepolia' else 'LEDGER_RPC_URL'
+        if not os.getenv(rpc_name):
+            result.update(state='unavailable',detail=f'Set {rpc_name} in this backend to check the recorded transaction. A signing private key is not required for this read-only check.')
             return result
         w3,chain_id=chain(entry.network);receipt=w3.eth.get_transaction_receipt(entry.tx_hash)
         block=w3.eth.get_block(receipt.blockNumber)
         contract=w3.eth.contract(address=Web3.to_checksum_address(entry.contract_address),abi=artifact()['abi'])
         key=os.getenv('VAULT_PRIVATE_KEY','') if entry.network=='sepolia' else os.getenv('LEDGER_PRIVATE_KEY','')
-        if not key or contract.functions.writer().call()!=w3.eth.account.from_key(key).address:
+        writer=contract.functions.writer().call()
+        if key and writer!=w3.eth.account.from_key(key).address:
             result.update(state='mismatch',detail='The vault writer differs from the configured Veris transaction writer.')
             return result
         row=contract.functions.getDocument(opaque(entry.document_id)).call()
         events=contract.events.DocumentStored().process_receipt(receipt)
         consent=hashlib.sha256(entry.consent.encode()).digest()
-        matches=receipt.status==1 and receipt.to.lower()==entry.contract_address.lower() and receipt.blockHash==block.hash and row[0]==entry.address and bytes(row[1]).hex()==entry.sha256 and row[2]==entry.cid and bytes(row[3])==consent
+        matches=receipt.status==1 and receipt.to.lower()==entry.contract_address.lower() and receipt['from'].lower()==writer.lower() and receipt.blockHash==block.hash and row[0]==entry.address and bytes(row[1]).hex()==entry.sha256 and row[2]==entry.cid and bytes(row[3])==consent
         matches=matches and any(bytes(e['args']['id'])==opaque(entry.document_id) and e['args']['owner']==entry.address and bytes(e['args']['fileHash']).hex()==entry.sha256 and e['args']['cid']==entry.cid and bytes(e['args']['consentHash'])==consent for e in events)
         result.update(state='matched' if matches else 'mismatch',matched=bool(matches),chain_id=chain_id,block=receipt.blockNumber,detail='Receipt, canonical block, owner, original fingerprint, encrypted CID and signed consent commitment match.' if matches else 'The transaction or contract fields do not match this wallet reference.')
     except TransactionNotFound:result['detail']='The transaction receipt is not available yet.'
-    except Exception:result.update(state='unavailable',detail='The blockchain could not be checked. No positive match was inferred.')
+    except Exception:result.update(state='unavailable',detail='The blockchain could not be checked. Check backend RPC access, network and vault configuration. No positive match was inferred.')
     return result
 
 def deploy(w3,key,account,chain_id,network,s):

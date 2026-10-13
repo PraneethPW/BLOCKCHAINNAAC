@@ -4,6 +4,7 @@ from datetime import datetime,timedelta,timezone
 from pathlib import Path
 import httpx
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.exceptions import InvalidTag
 from eth_account import Account as EthereumAccount
 from eth_account.messages import encode_defunct
 from fastapi import APIRouter,Depends,HTTPException,Request
@@ -14,6 +15,7 @@ from sqlalchemy.orm import Mapped,mapped_column,Session
 from sqlalchemy.exc import IntegrityError
 from web3 import Web3
 from main import Base,Account,Document,NetworkConfig,STORAGE,current,db,now,uid,canonical,get_document,document_list_json
+from wallet_runtime import wallet_enabled
 
 router=APIRouter()
 MAGIC=b'VERIS-VAULT-1\0'
@@ -56,10 +58,25 @@ class WalletDocument(Base):
 def config():
     network=os.getenv('VAULT_NETWORK','private-devnet')
     if network not in ('private-devnet','sepolia'):raise HTTPException(503,'Unsupported vault network configuration.')
-    record_configured=bool(os.getenv('LEDGER_RPC_URL') and os.getenv('LEDGER_PRIVATE_KEY')) if network=='private-devnet' else bool(os.getenv('VAULT_SEPOLIA_RPC_URL') and os.getenv('VAULT_PRIVATE_KEY') and os.getenv('VAULT_CONTRACT_ADDRESS'))
+    required=['LEDGER_RPC_URL','LEDGER_PRIVATE_KEY'] if network=='private-devnet' else ['VAULT_SEPOLIA_RPC_URL','VAULT_PRIVATE_KEY','VAULT_CONTRACT_ADDRESS']
+    missing=[name for name in ['PINATA_JWT','VAULT_ENCRYPTION_KEY']+required if not os.getenv(name,'').strip()]
+    invalid=[]
+    if os.getenv('VAULT_ENCRYPTION_KEY'):
+        try:file_key('configuration-validation')
+        except RuntimeError:invalid.append('VAULT_ENCRYPTION_KEY')
+    signer='LEDGER_PRIVATE_KEY' if network=='private-devnet' else 'VAULT_PRIVATE_KEY'
+    if os.getenv(signer):
+        try:EthereumAccount.from_key(os.environ[signer])
+        except Exception:invalid.append(signer)
+    if network=='sepolia' and os.getenv('VAULT_CONTRACT_ADDRESS'):
+        try:address(os.environ['VAULT_CONTRACT_ADDRESS'])
+        except HTTPException:invalid.append('VAULT_CONTRACT_ADDRESS')
+    record_configured=not any(name in missing+invalid for name in required)
+    worker=wallet_enabled()
     return dict(network=network,chain_id=1337 if network=='private-devnet' else 11155111,record_configured=record_configured,
                 label='Private Ethereum development network' if network=='private-devnet' else 'Sepolia testnet',
-                pinata_configured=bool(os.getenv('PINATA_JWT')),encryption_configured=bool(os.getenv('VAULT_ENCRYPTION_KEY')),
+                pinata_configured=bool(os.getenv('PINATA_JWT')),encryption_configured=bool(os.getenv('VAULT_ENCRYPTION_KEY')) and 'VAULT_ENCRYPTION_KEY' not in invalid,
+                worker_enabled=worker,save_ready=worker and not missing and not invalid,missing_settings=missing,invalid_settings=invalid,
                 storage='AES-256-GCM encrypted IPFS',key_custody='Encryption keys are managed by the Veris backend; your wallet private key stays in your wallet.')
 
 def address(value):
@@ -190,11 +207,19 @@ async def retrieve(cid):
 async def download(id:str,u:Account=Depends(current),s:Session=Depends(db)):
     entry,doc=owned(id,u,s)
     if not entry.cid:raise HTTPException(409,'IPFS upload is not complete.')
+    try:file_key(entry.document_id)
+    except RuntimeError as exc:raise HTTPException(503,str(exc)+' Restore the same key used when this file was encrypted.') from None
     try:
         payload=await retrieve(entry.cid)
         if hashlib.sha256(payload).hexdigest()!=entry.ciphertext_sha256:raise ValueError('Encrypted fingerprint differs.')
         data=decrypt(payload,entry)
-    except Exception:raise HTTPException(502,'IPFS retrieval or integrity verification failed. Retry without changing the stored evidence.') from None
+    except InvalidTag:raise HTTPException(502,'The IPFS file could not be decrypted. Restore the original VAULT_ENCRYPTION_KEY; generating a new key cannot open existing files.') from None
+    except httpx.TimeoutException:raise HTTPException(504,'The Pinata IPFS gateway timed out. Check this computer’s internet access and retry.') from None
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(502,f'The Pinata IPFS gateway returned HTTP {exc.response.status_code}. Check the pinned file and gateway availability; the stored CID has been preserved.') from None
+    except httpx.RequestError:raise HTTPException(502,'Unable to reach the Pinata IPFS gateway from this backend. Check internet access and firewall settings.') from None
+    except ValueError:raise HTTPException(502,'IPFS integrity verification failed. The file does not match the encrypted or original fingerprint; the reference has been preserved.') from None
+    except Exception:raise HTTPException(502,'IPFS retrieval failed. The original reference has been preserved; check the backend configuration and retry.') from None
     return Response(data,media_type='application/octet-stream',headers={'Content-Disposition':f'attachment; filename="document{Path(doc.filename).suffix}"'})
 
 @router.get('/wallet/documents/{id}/proof')

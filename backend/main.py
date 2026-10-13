@@ -328,14 +328,18 @@ async def lifespan(app):
     Base.metadata.create_all(engine)
     from schema_migrations import migrate_wallet_bindings
     migrate_wallet_bindings(engine)
+    from wallet_runtime import ledger_enabled, wallet_enabled
+    run_ledger,run_wallet=ledger_enabled(),wallet_enabled()
     async def anchor_loop():
         from anchor_worker import process
         from wallet_worker import process as wallet_process
         while True:
-            try: await asyncio.to_thread(process)
-            except Exception: logging.getLogger('veris').warning('Blockchain pass unavailable; queued evidence retained for retry.')
-            try: await asyncio.to_thread(wallet_process)
-            except Exception: logging.getLogger('veris').warning('Wallet storage pass unavailable; authorized originals retained.')
+            if run_ledger:
+                try: await asyncio.to_thread(process)
+                except Exception: logging.getLogger('veris').warning('Blockchain pass unavailable; queued evidence retained for retry.')
+            if run_wallet:
+                try: await asyncio.to_thread(wallet_process)
+                except Exception: logging.getLogger('veris').warning('Wallet storage pass unavailable; authorized originals retained.')
             await asyncio.sleep(20)
     async def verification_loop():
         from verification import process_next
@@ -344,7 +348,7 @@ async def lifespan(app):
             except Exception: logging.getLogger('veris').warning('Verification processor unavailable; pending jobs retained.')
             await asyncio.sleep(2)
     tasks=[]
-    if os.getenv('AUTO_ANCHOR','false').lower()=='true':tasks.append(asyncio.create_task(anchor_loop()))
+    if run_ledger or run_wallet:tasks.append(asyncio.create_task(anchor_loop()))
     if os.getenv('AUTO_VERIFY','false').lower()=='true':tasks.append(asyncio.create_task(verification_loop()))
     try: yield
     finally:
