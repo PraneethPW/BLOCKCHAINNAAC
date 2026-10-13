@@ -2,6 +2,8 @@
 
 Independent working prototype. No NAAC affiliation; no accreditation grades.
 
+For installation and startup instructions, see [Local development](#local-development).
+
 ## Experience
 
 React + TypeScript + Tailwind, Framer Motion, Three.js / React Three Fiber and GSAP ScrollTrigger. The landing uses a persistent WebGL environment: custom architectural textures blend with scroll position, flowing light filaments, small glints, ambient camera movement and a fine-pointer depth response. A consistent navy, blue and cyan palette connects it to the authenticated product. The compact product layout includes an interactive, keyboard-accessible workflow illustration; it never fabricates a document assessment. The previous header journey link and pause control are removed. Device or saved reduced-motion preferences render a static poster and remove ambient animation. The shader loads separately, caps rendering resolution and stops while the tab is hidden; unsupported WebGL retains the poster. Authentication and the workspace retain their existing background and functionality. Keyboard navigation, modal focus containment and responsive layouts are included. There are no runtime sample users, seeded dashboards or fabricated verification responses. Image provenance and generation prompts are recorded in frontend/public/images/ASSET_NOTES.md.
@@ -44,9 +46,172 @@ Only supported authorized decisions establish verified or confirmed-fraud status
 
 ## Local development
 
-Use Node 22+ and Python 3.12. In frontend: pnpm install, then pnpm dev. In backend: create a virtual environment, pip install -r requirements.txt, configure .env.example values in the process environment, then uvicorn main:app --host 127.0.0.1 --port 8000. Use --env-file .env if needed. Install Tesseract locally for OCR; the Docker image includes it. AUTO_VERIFY=true enables the processing loop. Development can use SQLite; production requires PostgreSQL and a strong JWT_SECRET.
+### 1. Install prerequisites
 
-The frontend calls same-origin /api. Vite proxies it to localhost:8000; frontend/vercel.json proxies it to the Railway API. This keeps sessions on the frontend origin. No database, AI or wallet credential belongs in frontend variables.
+Install **Git**, **Node.js 22 or later**, and **Python 3.12**. The commands below use **Windows PowerShell**. Install pnpm 10 using npm, which comes with Node.js:
+
+```powershell
+git --version
+node --version
+py -3.12 --version
+npm install --global pnpm@10
+pnpm --version
+```
+
+For scanned PDFs and image uploads, also install **Tesseract OCR** and add its executable directory to `PATH`. Confirm `tesseract --version` works in a newly opened terminal. Native PDF text extraction works without Tesseract; unreadable scans cannot obtain OCR text until it is installed. The Railway Docker image already includes Tesseract.
+
+### 2. Clone the project and install backend dependencies
+
+```powershell
+git clone https://github.com/PraneethPW/BLOCKCHAINNAAC.git
+cd BLOCKCHAINNAAC
+cd backend
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --upgrade pip
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+```
+
+The commands use the virtual environment's Python directly, so PowerShell activation or execution-policy changes are unnecessary.
+
+### 3. Create the local backend configuration
+
+While inside `backend`, run this block **once for a new local installation**. It creates `backend/.env` with a random session secret and a local SQLite database. If `.env` already exists, edit it instead of replacing it or generating a new vault encryption key.
+
+```powershell
+$verisLocalSecret = .\.venv\Scripts\python.exe -c "import secrets; print(secrets.token_hex(32))"
+@"
+APP_ENV=development
+DATABASE_URL=sqlite:///./veris.db
+JWT_SECRET=$verisLocalSecret
+FRONTEND_ORIGINS=http://127.0.0.1:5173,http://localhost:5173
+UPLOAD_DIR=./uploads
+AUTO_VERIFY=true
+AUTO_ANCHOR=false
+OPENROUTER_API_KEY=
+OPENROUTER_MODEL=openrouter/free
+LEDGER_NETWORK=sepolia
+SEPOLIA_RPC_URL=
+LEDGER_CONTRACT_ADDRESS=
+LEDGER_PRIVATE_KEY=
+VAULT_NETWORK=sepolia
+VAULT_SEPOLIA_RPC_URL=https://ethereum-sepolia-rpc.publicnode.com
+VAULT_PRIVATE_KEY=
+VAULT_CONTRACT_ADDRESS=
+PINATA_JWT=
+VAULT_ENCRYPTION_KEY=
+"@ | Set-Content -Encoding ascii .env
+```
+
+Do not use the Railway-oriented defaults in `backend/.env.example` unchanged: `APP_ENV=production` requires PostgreSQL, and `/data/uploads` is the hosted volume path. The local settings above use `development`, `./uploads` and SQLite. Configuration is loaded by the `--env-file .env` startup argument; merely creating the file does not configure other Python commands. Existing process environment variables take precedence over the file.
+
+**Optional Neon database:** replace only `DATABASE_URL` with the PostgreSQL connection string from a separate Neon development database, including its SSL parameters. For example:
+
+```dotenv
+DATABASE_URL=postgresql://YOUR_USER:YOUR_PASSWORD@YOUR_NEON_HOST/YOUR_DATABASE?sslmode=require
+```
+
+Use your own values, not the example placeholders. Startup creates the application's tables automatically. No manual SQL import or dataset import is needed. A local SQLite installation is separate from the hosted application's users and documents; using the production Neon URL would connect to production records.
+
+### 4. Start the backend — terminal 1
+
+Keep this terminal open, with its working directory set to `BLOCKCHAINNAAC/backend`:
+
+```powershell
+.\.venv\Scripts\python.exe -m uvicorn main:app --env-file .env --host 127.0.0.1 --port 8000 --reload
+```
+
+Check [API health](http://127.0.0.1:8000/health): it should return `"status":"ok"` and, with the default local configuration, `"database":"local-sqlite"`. Interactive API documentation is at [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs). `AUTO_VERIFY=true` runs the document-processing worker inside this server.
+
+### 5. Install and start the frontend — terminal 2
+
+Open a second terminal at the cloned `BLOCKCHAINNAAC` folder:
+
+```powershell
+cd frontend
+pnpm install --frozen-lockfile
+pnpm dev --host 127.0.0.1 --port 5173 --strictPort
+```
+
+Open **[http://127.0.0.1:5173](http://127.0.0.1:5173)**. The frontend sends requests to same-origin `/api`; Vite forwards them to the **local backend on port 8000**. It does not use the hosted Railway API during local development. No frontend `.env` or frontend secret is required. Keep both terminals running; press `Ctrl+C` in each terminal to stop the application.
+
+### 6. Register and check a document
+
+1. Select **Create an account**, enter your institution details, and choose a password of at least **12 characters**. There are no default accounts or sample passwords.
+2. Open **Dataset references** to inspect category coverage, download originals and export CSV/JSON labels. The repository already includes the reference PDFs and manifests in `backend/datasets/`.
+3. Select **Upload evidence** and use a matching category. For a source-comparison check, upload the unchanged `GPA_Environment_Lab_Inventory.pdf` under **Infrastructure**. After automatic processing, it should show **Genuine — matches reference dataset original** and **Laboratory inventory**. This result establishes file provenance, not ownership by your institution.
+4. Original uploads are saved in `backend/uploads/`; local database records are saved in `backend/veris.db` when SQLite is selected. Files enter Pinata only through a separately configured and authorized wallet save.
+
+To create a reviewer invitation for this local instance, run the following from `backend` in a separate terminal, then use the returned private invitation during registration:
+
+```powershell
+.\.venv\Scripts\python.exe -m dotenv -f .env run -- .\.venv\Scripts\python.exe provision_invitation.py --days 7
+```
+
+### Optional AI and Sepolia wallet setup
+
+Document upload, classification, reference comparisons and reports work without OpenRouter, Pinata or a funded blockchain wallet. Features that require an external provider need their actual configuration:
+
+| Feature | Backend `.env` settings / requirements |
+| --- | --- |
+| AI advisory analysis | Set `OPENROUTER_API_KEY`; keep `OPENROUTER_MODEL=openrouter/free` or an available `:free` model. Users must consent before document text is sent. |
+| MetaMask connection | Install/unlock MetaMask in the browser used for the local app, select Sepolia, then use **Document wallet → Connect & sign**. Wallet connection alone does not upload files to IPFS. |
+| Encrypted Pinata/IPFS saves and Sepolia records | Set `PINATA_JWT`, `VAULT_ENCRYPTION_KEY`, `VAULT_SEPOLIA_RPC_URL`, `VAULT_PRIVATE_KEY`, and the actual `VAULT_CONTRACT_ADDRESS`; enable `AUTO_ANCHOR=true` after configuration. The contract's writer must match the backend relay key, and that relay needs Sepolia test ETH. |
+| Fraud audit anchoring | Configure the independent `LEDGER_NETWORK`, corresponding RPC URL, `LEDGER_PRIVATE_KEY` and deployed ledger contract. The fraud ledger and document vault are separate contracts; configuring one does not configure the other. |
+
+Generate a **new** vault encryption key only when configuring a new vault, and retain it for future document retrieval:
+
+```powershell
+.\.venv\Scripts\python.exe -c "import secrets,base64; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())"
+```
+
+Put the output in `VAULT_ENCRYPTION_KEY`. For a new Sepolia vault, follow the **Signed document wallet and encrypted IPFS vault** section below. Its deployment script also needs the `.env` values loaded; for example, from `backend`:
+
+```powershell
+.\.venv\Scripts\python.exe -m dotenv -f .env run -- .\.venv\Scripts\python.exe deploy_vault.py --journal ..\..\veris-private\vault-deployment.json
+```
+
+The journal path above creates `veris-private` alongside the cloned repository, outside Git's working tree. Set `VAULT_CONTRACT_ADDRESS` to the address returned by your own deployment, then restart the backend. Keep deployment journals, keys and `.env` private. Never put database passwords, OpenRouter keys, Pinata tokens, wallet private keys or recovery phrases in frontend variables or commit them to Git. `AUTO_ANCHOR=false` in the basic setup intentionally leaves blockchain writes disabled; it does not create simulated receipts.
+
+### macOS / Linux equivalents
+
+Use the same configuration values from step 3 in `backend/.env`. Generate `JWT_SECRET` with `python -c "import secrets; print(secrets.token_hex(32))"` after activating the environment, and paste that output as its value instead of the PowerShell variable `$verisLocalSecret`. Backend commands:
+
+```bash
+git clone https://github.com/PraneethPW/BLOCKCHAINNAAC.git
+cd BLOCKCHAINNAAC/backend
+python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+# Create .env using step 3's settings before starting the server.
+python -m uvicorn main:app --env-file .env --host 127.0.0.1 --port 8000 --reload
+```
+
+In another terminal, enter `BLOCKCHAINNAAC/frontend`, run `npm install --global pnpm@10`, then `pnpm install --frozen-lockfile` and `pnpm dev --host 127.0.0.1 --port 5173 --strictPort`. For optional backend utility commands, the activated environment supports `python -m dotenv -f .env run -- python provision_invitation.py --days 7` and the equivalent vault deployment command.
+
+### Common local setup problems
+
+| Symptom | Check / fix |
+| --- | --- |
+| `py -3.12`, `node`, or `pnpm` not found | Install the corresponding prerequisite and reopen the terminal so `PATH` updates take effect. |
+| Backend says production requires PostgreSQL | Confirm `APP_ENV=development` in the local `.env` and remove any conflicting `APP_ENV` exported by your terminal. |
+| Frontend shows `/api` connection errors | Start the backend on `127.0.0.1:8000` and check `/health`; the frontend must run on port 5173. |
+| Port already in use | Stop the earlier local server using that port. The documented frontend command fails instead of silently moving to an origin absent from `FRONTEND_ORIGINS`. |
+| Verification remains queued | Check `AUTO_VERIFY=true`, restart the backend after configuration changes, and inspect its terminal for worker errors. |
+| OCR unavailable | Confirm `tesseract --version` succeeds in the same environment used to start the backend. |
+| Hosted login does not work locally | Register a local account when using SQLite; hosted and local databases are separate. Use one frontend address consistently (`127.0.0.1` or `localhost`), since browser sessions belong to that origin. |
+| Wallet save unavailable or stays queued | Complete the Pinata, encryption, RPC, contract and funded-relay configuration; enable `AUTO_ANCHOR` and restart. MetaMask connection does not supply the backend relay credentials. |
+
+### Local validation commands
+
+From `backend`, run the isolated regression suite or replay the classification corpus:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests -q
+.\.venv\Scripts\python.exe evaluate_classification.py --output classification-evaluation.json
+```
+
+From `frontend`, run `pnpm build` to check TypeScript and generate `dist/`. The classification replay is a development diagnostic, not a held-out accuracy benchmark. Production hosting uses `frontend/vercel.json` to proxy `/api` to Railway; see the hosting section for that separate configuration.
 
 ## Hosting
 
