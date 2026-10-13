@@ -1,5 +1,5 @@
 {
-  "version": "2026-10-12.1",
+  "version": "2026-10-13.1",
   "method": "Exact SHA-256 reference comparison. No statistical training or universal fraud classifier.",
   "records": [
     {
@@ -169,6 +169,78 @@
       "reference": "Partial evidence controlled evaluation file",
       "source_url": "",
       "detail": "Controlled evaluation fixture; not a real allegation or institutional original."
+    },
+    {
+      "id": "public-faculty_roster-v1",
+      "filename": "SJCE_Faculty_Roster.pdf",
+      "sha256": "612c4080b916ed0f147d7b361f11438750ac1a336c32447d3c4dce4dfb3a9d61",
+      "label": "genuine",
+      "category": "Teaching & faculty",
+      "scope": "official_original",
+      "institution": "Sri Jayachamarajendra College of Engineering",
+      "reference": "Public issuer/publisher original retrieved 2026-10-13T10:21:28.729106+00:00",
+      "source_url": "https://sjce.ac.in/wp-content/uploads/2022/08/Faculty-list-with-joining-date-new.pdf",
+      "detail": "Unchanged PDF retrieved over HTTPS from the named institution or publisher. Document type annotated from the report heading and contents. Genuine describes file provenance only; reported claims and institutional ownership are not independently validated."
+    },
+    {
+      "id": "public-journal_article-v1",
+      "filename": "Nature_Array_Programming_NumPy.pdf",
+      "sha256": "6728d4ba00fcb73e7872b1cb4b05a7a51482a152da6a9464a15d8f6dcdeb8a3d",
+      "label": "genuine",
+      "category": "Research publications",
+      "scope": "official_original",
+      "institution": "Nature",
+      "reference": "Public issuer/publisher original retrieved 2026-10-13T10:21:33.902740+00:00",
+      "source_url": "https://www.nature.com/articles/s41586-020-2649-2.pdf",
+      "detail": "Unchanged PDF retrieved over HTTPS from the named institution or publisher. Document type annotated from the report heading and contents. Genuine describes file provenance only; reported claims and institutional ownership are not independently validated."
+    },
+    {
+      "id": "public-placement_report-v1",
+      "filename": "IITB_Placement_Report_2023_24.pdf",
+      "sha256": "3436058739c0f9d0d555496117556a22d5d448886e640af0a496387d1414af8a",
+      "label": "genuine",
+      "category": "Student placements",
+      "scope": "official_original",
+      "institution": "IIT Bombay",
+      "reference": "Public issuer/publisher original retrieved 2026-10-13T10:21:29.080958+00:00",
+      "source_url": "https://campus.placements.iitb.ac.in/static/docs/placement_report_2023_24.pdf",
+      "detail": "Unchanged PDF retrieved over HTTPS from the named institution or publisher. Document type annotated from the report heading and contents. Genuine describes file provenance only; reported claims and institutional ownership are not independently validated."
+    },
+    {
+      "id": "public-laboratory_inventory-v1",
+      "filename": "GPA_Environment_Lab_Inventory.pdf",
+      "sha256": "01922468ead4055eaa707e3815972e11b5f354e1aa7abb7e5d9d60e464060527",
+      "label": "genuine",
+      "category": "Infrastructure",
+      "scope": "official_original",
+      "institution": "Government Polytechnic Aurangabad",
+      "reference": "Public issuer/publisher original retrieved 2026-10-13T10:21:28.042459+00:00",
+      "source_url": "https://gpabad.ac.in/wp-content/uploads/2021/02/ENVIRONMENT-LABORATORY.pdf",
+      "detail": "Unchanged PDF retrieved over HTTPS from the named institution or publisher. Document type annotated from the report heading and contents. Genuine describes file provenance only; reported claims and institutional ownership are not independently validated."
+    },
+    {
+      "id": "public-graduation_report-v1",
+      "filename": "ZHDC_Pass_Percentage.pdf",
+      "sha256": "21ae22b0f6cc9ea58e3055fff823de9ee3326d93ed8e69f81be6ba6792b5c9d5",
+      "label": "genuine",
+      "category": "Student outcomes",
+      "scope": "official_original",
+      "institution": "Zakir Husain Delhi College",
+      "reference": "Public issuer/publisher original retrieved 2026-10-13T10:21:27.864750+00:00",
+      "source_url": "https://www.zakirhusaindelhicollege.ac.in/wp-content/uploads/2024/08/2.6.3-upload-1-Pass-Percentage-5-years.pdf",
+      "detail": "Unchanged PDF retrieved over HTTPS from the named institution or publisher. Document type annotated from the report heading and contents. Genuine describes file provenance only; reported claims and institutional ownership are not independently validated."
+    },
+    {
+      "id": "public-audited_statement-v1",
+      "filename": "IIITA_Audited_Accounts_2023_24.pdf",
+      "sha256": "7d914b23af037b875a7d8ce0fa13e338cd99bd5a36c4ec2df0bb07e85522ad6c",
+      "label": "genuine",
+      "category": "Financial records",
+      "scope": "official_original",
+      "institution": "IIIT Allahabad",
+      "reference": "Public issuer/publisher original retrieved 2026-10-13T10:21:33.643281+00:00",
+      "source_url": "https://iiita.ac.in/sites/default/files/balance_sheet_2023_24_english.pdf",
+      "detail": "Unchanged PDF retrieved over HTTPS from the named institution or publisher. Document type annotated from the report heading and contents. Genuine describes file provenance only; reported claims and institutional ownership are not independently validated."
     }
   ]
 }

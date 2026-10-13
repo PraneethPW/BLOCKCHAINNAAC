@@ -1,0 +1,29 @@
+.classification-panel{padding:28px;margin-bottom:24px}
+.classification-panel h2{display:flex;align-items:center;gap:10px}
+.classification-panel p{line-height:1.65;color:var(--muted,#b5c5da)}
+.classification-actions,.classification-inventory footer{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+.classification-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px;margin:24px 0}
+.classification-stats>div{display:flex;flex-direction:column;gap:8px;padding:16px;border:1px solid #34475e;border-radius:12px}
+.classification-stats strong{font-size:28px}.classification-stats span{font-size:13px;color:#bed0e5}
+.classification-baseline{padding:16px 0;border-block:1px solid #34475e;margin-bottom:20px}
+.classification-baseline p{margin-bottom:0}
+.classification-coverage>details{border-bottom:1px solid #34475e}
+.classification-coverage summary{padding:18px 0;cursor:pointer;min-height:44px}
+.classification-coverage summary span{float:right;font-size:13px;color:#bed0e5}
+.classification-table-wrap{overflow-x:auto;margin-bottom:18px}.classification-panel table{width:100%;border-collapse:collapse;min-width:500px}
+.classification-panel th,.classification-panel td{text-align:left;padding:12px;border-bottom:1px solid #34475e;font-size:13px}
+.classification-panel h3{margin:28px 0 16px}.classification-filters{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}
+.classification-filters label{min-width:0}.classification-filters select{width:100%}
+.classification-inventory article{padding:22px 0;border-bottom:1px solid #34475e}
+.classification-inventory header{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}
+.classification-inventory header p{margin:6px 0;overflow-wrap:anywhere}.classification-inventory small{color:#bed0e5}
+.classification-inventory summary{cursor:pointer;padding:10px 0;min-height:44px}
+.classification-inventory code{overflow-wrap:anywhere;white-space:normal;font-size:12px}
+.classification-inventory footer{margin-top:12px;justify-content:space-between}
+.classification-inventory a{display:inline-flex;gap:8px;align-items:center;min-height:44px;color:#9fbeff}
+.classification-register{padding-top:24px}.classification-register form{margin-top:20px}
+.classification-empty{padding:24px 0}.document-classification{margin:20px 0;padding:20px;border:1px solid #34475e;border-radius:14px}
+.document-classification header{display:flex;justify-content:space-between;gap:16px;align-items:start}
+.document-classification h4{font-size:19px;margin:8px 0}.document-classification p{line-height:1.65;color:#bed0e5}
+.document-classification ul{padding-left:20px;color:#bed0e5;font-size:13px;line-height:1.8}
+@media(max-width:760px){.classification-panel{padding:18px}.classification-panel .panel-title,.classification-inventory header{display:block}.classification-actions{margin-top:16px}.classification-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.classification-filters{grid-template-columns:1fr}.classification-coverage summary span{float:none;display:block;margin-top:8px}.classification-inventory header>.small-label{display:block;margin-top:12px}}

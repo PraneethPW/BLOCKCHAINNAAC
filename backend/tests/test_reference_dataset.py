@@ -5,7 +5,7 @@ import main,reference_dataset as dataset,verification
 from test_workflow import account,upload
 
 def test_manifest_exact_labels_and_changed_bytes(client):
-    catalogue=dataset.manifest();assert len(catalogue['records'])==14
+    catalogue=dataset.manifest();assert len(catalogue['records'])==20
     with main.SessionLocal() as s:
         for record in catalogue['records']:
             doc=SimpleNamespace(category=record['category'],college='Own college',period='2025')

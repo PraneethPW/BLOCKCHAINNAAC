@@ -160,6 +160,10 @@ def process_next():
                     if hashlib.sha256(data).hexdigest()!=doc.sha256:raise RuntimeError('Stored file fingerprint differs from the submission. Integrity investigation required.')
                     stage('Extracting text and examining file structure',25)
                     content,metadata,observations=inspect_bytes(data,file.suffix)
+                    stage('Classifying document type',40)
+                    from document_classification import classify
+                    from classification_dataset import matched_type
+                    metadata['classification']=classify(content,doc.category,matched_type(data))
                     stage('Searching public publication records' if doc.category=='Research publications' else 'Checking authorized issuer records',55)
                     results=[];searches=[]
                     discovery_reason=''

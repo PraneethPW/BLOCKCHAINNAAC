@@ -3,6 +3,7 @@ import type {FormEvent} from 'react';
 import {Database,Download,ExternalLink,Loader2,Plus} from 'lucide-react';
 import {api,downloadFile} from './api';
 import {categories} from './types';
+import ClassificationConsole from './ClassificationConsole';
 type Reference={id:string;filename:string;sha256:string;label:string;category:string;scope:string;institution:string;source_url:string;detail:string;reference:string};
 type Catalogue={version:string;method:string;scope:string;counts:Record<string,number>;records:Reference[];registration_allowed:boolean;registered:{id:string;label:string;college:string;category:string;period:string;reference:string;sha256:string}[]};
 export default function DatasetConsole(){
@@ -11,7 +12,7 @@ export default function DatasetConsole(){
  useEffect(()=>{let active=true;api<Catalogue>('/dataset').then(d=>{if(active)setData(d);}).catch(e=>{if(active)setError(e.message);});return()=>{active=false;};},[]);
  async function register(e:FormEvent<HTMLFormElement>){e.preventDefault();setBusy(true);setError('');try{await api('/dataset/records',{method:'POST',body:new FormData(e.currentTarget)});await load();setAdding(false);setMessage('Reference saved. Recheck matching evidence to apply this label.');}catch(err){setError((err as Error).message);}finally{setBusy(false);}}
  async function download(){setBusy(true);setError('');try{await downloadFile('/dataset/test-documents','Veris_Reference_Dataset.zip');}catch(e){setError((e as Error).message);}finally{setBusy(false);}}
- return <div className="dataset-console">{error&&<div className="form-error" role="alert">{error}</div>}{message&&<p className="wallet-feedback" role="status">{message}</p>}{!data?<div className="loading-panel"><Loader2 className="spin"/>Loading reference provenance…</div>:<>
+ return <div className="dataset-console"><ClassificationConsole/>{error&&<div className="form-error" role="alert">{error}</div>}{message&&<p className="wallet-feedback" role="status">{message}</p>}{!data?<div className="loading-panel"><Loader2 className="spin"/>Loading reference provenance…</div>:<>
   <section className="panel dataset-intro"><Database size={26}/><div><span className="eyebrow">DATASET VERSION {data.version}</span><h2>Know what your file was compared with</h2><p>{data.scope}</p><small>{data.method}</small></div><button className="button primary" disabled={busy} onClick={()=>void download()}><Download size={17}/>Download test files</button></section>
   <div className="wallet-service-grid dataset-counts">{[['genuine','Official originals'],['fabricated','Declared fictional fixtures'],['neutral','Partial-evidence fixtures']].map(([label,title])=><div key={label}><span>{title}</span><strong>{data.counts[label]}</strong></div>)}</div>
   <p className="evidence-plain-note">A duplicate is a repeated file fingerprint, not a fake verdict. Dataset absence is not evidence of fraud. These fixtures are for controlled testing; no fabricated training accuracy is claimed.</p>

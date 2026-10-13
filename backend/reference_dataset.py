@@ -51,7 +51,7 @@ def compare(doc,data,s):
 def catalogue(u:Account=Depends(current),s:Session=Depends(db)):
     value=manifest();records=value['records']
     registered=list(s.scalars(select(DatasetRecord).order_by(DatasetRecord.created_at.desc()))) if u.role=='reviewer' else []
-    return dict(**value,counts={label:sum(r['label']==label for r in records) for label in ['genuine','fabricated','neutral']},registered=[{k:getattr(r,k) for k in ['id','sha256','label','college','category','period','reference','created_at']} for r in registered],registration_allowed=u.role=='reviewer',scope='Two official NIRF originals and twelve clearly labeled controlled fixtures. This is a reference dataset, not a trained fraud model.')
+    return dict(**value,counts={label:sum(r['label']==label for r in records) for label in ['genuine','fabricated','neutral']},registered=[{k:getattr(r,k) for k in ['id','sha256','label','college','category','period','reference','created_at']} for r in registered],registration_allowed=u.role=='reviewer',scope='Public issuer and publisher originals, plus clearly labeled controlled fixtures. Exact reference matches establish file provenance within their stated scope; this is not a trained fraud model.')
 
 @router.get('/dataset/test-documents')
 def test_documents(u:Account=Depends(current)):

@@ -172,7 +172,11 @@ def test_durable_job_and_archive_visibility(client,monkeypatch):
     verification.process_next()
     result=client.get('/documents/'+d['id'],headers=owner).json()
     assert result['job']['state']=='complete' and result['job']['progress']==100
-    assert len(result['job']['timeline'])==5
+    stages=[entry['stage'] for entry in result['job']['timeline']]
+    assert stages[0]=='Inspecting original file integrity'
+    assert 'Classifying document type' in stages
+    assert stages[-1].startswith('Automatic assessment:')
+    assert result['job']['result']['metadata']['classification']['version']=='1.0'
     assert result['status']=='unverified' and result['job']['result']['sources']==[]
     before=client.get('/workspace',headers=owner).json()
     assert before['total']==1

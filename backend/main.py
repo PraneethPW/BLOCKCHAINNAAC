@@ -573,6 +573,12 @@ def evidence_report(id:str,u:Account=Depends(current),s:Session=Depends(db)):
         job=data['job'];paragraph('Processing and source provenance','Heading2')
         paragraph(f"Job: {job['id']} / {job['state']} / {job['stage']} / {job['progress']}%\nUpdated: {job['updated_at']}")
         if job.get('error'):paragraph('Processing error: '+job['error'])
+        classification=job.get('result',{}).get('metadata',{}).get('classification')
+        if classification:
+            paragraph('Document type classification','Heading2')
+            paragraph(f"Type: {classification['label']}\nCategory: {classification.get('category') or 'Unassigned'}\nMethod: {classification['method']} / version {classification['version']}\n{classification['explanation']}")
+            for item in classification['evidence']:paragraph(item)
+            paragraph(classification['scope'])
         publisher=job.get('result',{}).get('publisher_original')
         dataset=job.get('result',{}).get('dataset')
         if dataset:
@@ -677,3 +683,5 @@ from wallet import router as wallet_router
 app.include_router(wallet_router)
 from reference_dataset import router as dataset_router
 app.include_router(dataset_router)
+from classification_dataset import router as classification_router
+app.include_router(classification_router)
